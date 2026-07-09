@@ -234,7 +234,7 @@ export default function App() {
         {tab === "shop" && <ShopTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "battle" && <BattleTab profile={profile} game={game} persistProfile={persistProfile} />}
         {tab === "friends" && <FriendsTab profile={profile} showToast={showToast} />}
-        {tab === "news" && <NewsTab game={game} />}
+        {tab === "news" && <NewsTab game={game} profile={profile} showToast={showToast} />}
         {tab === "profile" && <ProfileTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
       </div>
@@ -481,13 +481,13 @@ function BoxOpenOverlay({ box, results, revealed, onStart, onRevealNext, onClose
         <>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", maxWidth: 440, minHeight: 190 }}>
             {results.map((res, i) => {
-              if (i > revealed) return <FaceDownCard key={i} />;
-              if (i === revealed && i < results.length) return <RewardCard key={i} res={res} charById={charById} itemById={itemById} revealing onDone={onRevealNext} />;
-              return <RewardCard key={i} res={res} charById={charById} itemById={itemById} />;
+              if (i < revealed) return <RewardCard key={i} res={res} charById={charById} itemById={itemById} revealing={i === revealed - 1} />;
+              if (i === revealed) return <FaceDownCard key={i} active onClick={onRevealNext} />;
+              return <FaceDownCard key={i} />;
             })}
           </div>
           {!finished ? (
-            <div style={{ marginTop: 22, fontSize: 12.5, color: "#8a8998" }}>Carte {revealed + 1} / {results.length}…</div>
+            <div style={{ marginTop: 22, fontSize: 13, color: "#F0A93A", fontWeight: 700 }}>👆 Touche la carte {revealed + 1} / {results.length} pour la révéler</div>
           ) : (
             <button onClick={onClose} style={{ all: "unset", cursor: "pointer", marginTop: 26, padding: "13px 30px", borderRadius: 12, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13.5 }}>Continuer</button>
           )}
@@ -497,14 +497,20 @@ function BoxOpenOverlay({ box, results, revealed, onStart, onRevealNext, onClose
   );
 }
 
-function FaceDownCard() {
+function FaceDownCard({ active, onClick }) {
   return (
-    <div style={{ width: 118, height: 154, borderRadius: 13, background: "linear-gradient(135deg,#201f29,#161520)", border: "1.5px solid #2e2d3a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, opacity: 0.5 }}>🃏</div>
+    <button onClick={active ? onClick : undefined} style={{
+      all: "unset", width: 118, height: 154, borderRadius: 13, boxSizing: "border-box",
+      background: "linear-gradient(135deg,#26202f,#17161f)",
+      border: active ? "2px solid #F0A93A" : "1.5px solid #2e2d3a",
+      display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30,
+      opacity: active ? 1 : 0.4, cursor: active ? "pointer" : "default",
+      animation: active ? "glowRing 1.1s ease-in-out infinite" : undefined, color: "#F0A93A",
+    }}>🃏</button>
   );
 }
 
-function RewardCard({ res, charById, itemById, revealing, onDone }) {
-  useEffect(() => { if (revealing) { const t = setTimeout(onDone, 900); return () => clearTimeout(t); } }, [revealing]);
+function RewardCard({ res, charById, itemById, revealing }) {
   let color = "#F0A93A", border = "#F0A93A66";
   let body = null;
   if (res.kind === "coin") {
@@ -615,29 +621,39 @@ function BattleTab({ profile, game, persistProfile }) {
     const itemById = (id) => game.items.find((i) => i.id === id);
     return (
       <div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <BattleSidePanel title="Toi" chars={p.chars} active={p.active} />
-          <div style={{ display: "flex", alignItems: "center", fontSize: 20 }}>⚔️</div>
-          <BattleSidePanel title="Adversaire" chars={b.chars} active={b.active} align="right" />
+        <style>{`@keyframes activeGlow { 0%,100%{ box-shadow: 0 0 0 3px #F0A93A, 0 0 18px #F0A93A88;} 50%{ box-shadow: 0 0 0 3px #FFD54A, 0 0 26px #FFD54Aaa;} }`}</style>
+        <div style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+            <BattleSidePanel title="Ton équipe" chars={p.chars} active={p.active} teamColor="#5B8DEF" />
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
+              <div style={{ fontSize: 22 }}>⚔️</div>
+              <div style={{ fontSize: 9, color: "#8a8998", fontWeight: 800 }}>VS</div>
+            </div>
+            <BattleSidePanel title="Adversaire" chars={b.chars} active={b.active} align="right" teamColor="#ef6a6a" />
+          </div>
         </div>
-        <div ref={logRef} style={{ background: "#111117", border: "1px solid #232230", borderRadius: 12, padding: 12, height: 150, overflowY: "auto", margin: "12px 0", fontSize: 12, lineHeight: 1.6, color: "#b9b8c4" }}>{fight.log.map((l, i) => <div key={i}>{l}</div>)}</div>
+        <div ref={logRef} style={{ background: "#111117", border: "1px solid #232230", borderRadius: 12, padding: 12, height: 130, overflowY: "auto", margin: "12px 0", fontSize: 12, lineHeight: 1.6, color: "#b9b8c4" }}>{fight.log.map((l, i) => <div key={i}>{l}</div>)}</div>
         {!fight.over ? (
           <>
-            <div style={{ fontSize: 11, color: "#77768a", fontWeight: 700, marginBottom: 6, textTransform: "uppercase" }}>Actions de {pc.name}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, background: "#1a1922", borderRadius: 10, padding: "8px 10px" }}>
+              {pc.image_url ? <img src={pc.image_url} alt="" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", border: "2px solid #5B8DEF" }} /> : <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#5B8DEF33", display: "flex", alignItems: "center", justifyContent: "center" }}>🃏</div>}
+              <div style={{ fontSize: 12.5, fontWeight: 800 }}>Choisis l'action de {pc.name}</div>
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <ActionBtn label={pc.attack1?.name} sub={`-${pc.attack1?.dmg || 0}`} onClick={() => doTurn({ type: "move", moveKey: "attack1" })} />
-              {pc.attack2 && (pc.attack2.dmg > 0 || pc.attack2.heal > 0) && <ActionBtn label={pc.attack2.name} sub={pc.attack2.dmg ? `-${pc.attack2.dmg}` : `+${pc.attack2.heal} PV`} onClick={() => doTurn({ type: "move", moveKey: "attack2" })} />}
-              {pc.super && <ActionBtn label={pc.super.name} sub={`Super -${pc.super.dmg}`} disabled={pc.superUsed} gold onClick={() => doTurn({ type: "move", moveKey: "super" })} />}
+              <ActionBtn label={pc.attack1?.name} sub={`-${pc.attack1?.dmg || 0} dégâts`} icon="🥊" kind="attack1" onClick={() => doTurn({ type: "move", moveKey: "attack1" })} />
+              {pc.attack2 && (pc.attack2.dmg > 0 || pc.attack2.heal > 0) && <ActionBtn label={pc.attack2.name} sub={pc.attack2.dmg ? `-${pc.attack2.dmg} dégâts` : `+${pc.attack2.heal} PV`} icon="💥" kind="attack2" onClick={() => doTurn({ type: "move", moveKey: "attack2" })} />}
+              {pc.super && <ActionBtn label={pc.super.name} sub={`SUPER · -${pc.super.dmg}`} icon="🌟" kind="super" disabled={pc.superUsed} onClick={() => doTurn({ type: "move", moveKey: "super" })} />}
             </div>
             {myItems.length > 0 && (<>
-              <div style={{ fontSize: 11, color: "#77768a", fontWeight: 700, margin: "12px 0 6px", textTransform: "uppercase" }}>🎒 Objets actifs</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{myItems.map(([id, n]) => { const it = itemById(id); if (!it) return null; return <ActionBtn key={id} label={`${it.name} ×${n}`} sub={it.effect} onClick={() => doTurn({ type: "item", item: it })} purple />; })}</div>
+              <div style={{ fontSize: 11, color: "#A855F7", fontWeight: 800, margin: "12px 0 6px", textTransform: "uppercase" }}>🎒 Objets actifs</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{myItems.map(([id, n]) => { const it = itemById(id); if (!it) return null; return <ActionBtn key={id} label={`${it.name} ×${n}`} sub={it.effect} icon="🎒" kind="item" onClick={() => doTurn({ type: "item", item: it })} />; })}</div>
             </>)}
           </>
         ) : (
-          <div style={{ textAlign: "center", padding: "14px 0" }}>
-            <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, color: fight.result === "win" ? "#7cd992" : "#ef6a6a", marginBottom: 6 }}>{fight.result === "win" ? "Victoire !" : "Défaite"}</div>
-            <div style={{ fontSize: 13, color: "#9a99a8", marginBottom: 16 }}>+{fight.reward} ⭐</div>
+          <div style={{ textAlign: "center", padding: "18px 0", background: fight.result === "win" ? "linear-gradient(160deg,#173322,#0e0e13)" : "linear-gradient(160deg,#331717,#0e0e13)", borderRadius: 16, border: `1.5px solid ${fight.result === "win" ? "#7cd99255" : "#ef6a6a55"}` }}>
+            <div style={{ fontSize: 40, marginBottom: 6 }}>{fight.result === "win" ? "🏆" : "💀"}</div>
+            <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 20, color: fight.result === "win" ? "#7cd992" : "#ef6a6a", marginBottom: 6 }}>{fight.result === "win" ? "Victoire !" : "Défaite"}</div>
+            <div style={{ fontSize: 14, color: "#F0A93A", fontWeight: 800, marginBottom: 16 }}>+{fight.reward} ⭐</div>
             <button onClick={() => { setFight(null); setTeam([]); }} style={{ all: "unset", cursor: "pointer", padding: "12px 28px", borderRadius: 12, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13.5 }}>Retour</button>
           </div>
         )}
@@ -668,28 +684,58 @@ function BattleTab({ profile, game, persistProfile }) {
   );
 }
 
-function ActionBtn({ label, sub, onClick, disabled, gold, purple }) {
+const ACTION_KIND_STYLE = {
+  attack1: { bg: "linear-gradient(135deg,#3a2a1a,#2a1c12)", border: "#F0A93A", text: "#F0A93A" },
+  attack2: { bg: "linear-gradient(135deg,#1a2a3a,#12202c)", border: "#5B8DEF", text: "#5B8DEF" },
+  super:   { bg: "linear-gradient(135deg,#3a2a12,#2a1c08)", border: "#FFD54A", text: "#FFD54A" },
+  item:    { bg: "linear-gradient(135deg,#2a1a3a,#1c122a)", border: "#A855F7", text: "#A855F7" },
+};
+
+function ActionBtn({ label, sub, icon, onClick, disabled, kind }) {
+  const st = ACTION_KIND_STYLE[kind] || ACTION_KIND_STYLE.attack1;
   return (
-    <button disabled={disabled} onClick={onClick} style={{ all: "unset", cursor: disabled ? "not-allowed" : "pointer", padding: "11px 12px", borderRadius: 11, background: disabled ? "#1a1922" : (gold ? "#2a2314" : purple ? "#231c2e" : "#17161f"), border: `1.5px solid ${disabled ? "#232230" : gold ? "#F0A93A66" : purple ? "#A855F766" : "#2a2933"}`, opacity: disabled ? 0.4 : 1 }}>
-      <div style={{ fontWeight: 800, fontSize: 12.5, color: gold ? "#F0A93A" : "#f4f2ec", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: 10.5, color: "#8a8998" }}>{sub}</div>
+    <button disabled={disabled} onClick={onClick} style={{
+      all: "unset", cursor: disabled ? "not-allowed" : "pointer", padding: "12px 12px", borderRadius: 13,
+      background: disabled ? "#1a1922" : st.bg, border: `2px solid ${disabled ? "#232230" : st.border}`,
+      opacity: disabled ? 0.35 : 1, display: "flex", alignItems: "center", gap: 9,
+      boxShadow: disabled ? "none" : `0 3px 12px ${st.border}33`,
+    }}>
+      <span style={{ fontSize: 18 }}>{icon}</span>
+      <span style={{ textAlign: "left" }}>
+        <div style={{ fontWeight: 800, fontSize: 12.5, color: disabled ? "#6b6a78" : st.text, marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: 10.5, color: "#a3a2af" }}>{sub}</div>
+      </span>
     </button>
   );
 }
 
-function BattleSidePanel({ title, chars, active, align }) {
+function BattleSidePanel({ title, chars, active, align, teamColor }) {
   return (
     <div style={{ flex: 1 }}>
-      <div style={{ fontSize: 10.5, color: "#77768a", fontWeight: 700, marginBottom: 6, textAlign: align === "right" ? "right" : "left" }}>{title}</div>
-      {chars.map((c, i) => { const pct = Math.max(0, Math.round((c.curHp / c.hp) * 100)); const isActive = i === active; return (
-        <div key={i} style={{ opacity: c.curHp <= 0 ? 0.35 : 1, marginBottom: 6 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, marginBottom: 2, flexDirection: align === "right" ? "row-reverse" : "row" }}>
-            <span style={{ fontWeight: isActive ? 800 : 500 }}>{c.name}{isActive && c.curHp > 0 ? " ▶" : ""}</span>
-            <span style={{ color: "#8a8998", fontFamily: "'JetBrains Mono', monospace" }}>{c.curHp}/{c.hp}</span>
+      <div style={{ fontSize: 10, color: teamColor, fontWeight: 800, marginBottom: 8, textAlign: align === "right" ? "right" : "left", textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</div>
+      {chars.map((c, i) => {
+        const pct = Math.max(0, Math.round((c.curHp / c.hp) * 100));
+        const isActive = i === active && c.curHp > 0;
+        const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a";
+        return (
+          <div key={i} style={{ opacity: c.curHp <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: "50%", flexShrink: 0, overflow: "hidden", background: "#0e0e13",
+              border: `2px solid ${isActive ? teamColor : "#33333f"}`,
+              animation: isActive ? "activeGlow 1s ease-in-out infinite" : undefined,
+            }}>
+              {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2, flexDirection: align === "right" ? "row-reverse" : "row" }}>
+                <span style={{ fontWeight: isActive ? 800 : 600, color: isActive ? "#fff" : "#c2c1cc" }}>{c.name}</span>
+                <span style={{ color: hpColor, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>{c.curHp}/{c.hp}</span>
+              </div>
+              <div style={{ height: 6, background: "#232230", borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: hpColor, boxShadow: `0 0 6px ${hpColor}` }} /></div>
+            </div>
           </div>
-          <div style={{ height: 5, background: "#232230", borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a" }} /></div>
-        </div>
-      ); })}
+        );
+      })}
     </div>
   );
 }
@@ -803,24 +849,70 @@ function Section({ title, children }) {
 
 /* ---------------------------------- Actus ---------------------------------- */
 
-function NewsTab({ game }) {
+function NewsTab({ game, profile, showToast }) {
   const sorted = [...game.events].sort((a, b) => (b.pinned - a.pinned) || (b.published_at || "").localeCompare(a.published_at || ""));
   return (
     <div>
       <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 14 }}>Actualités</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {sorted.map((n) => (
-          <div key={n.id} style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 14, padding: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-              {n.pinned && <span style={{ fontSize: 12 }}>📌</span>}
-              <div style={{ fontWeight: 800, fontSize: 14.5, flex: 1 }}>{n.title}</div>
-              <div style={{ fontSize: 10.5, color: "#77768a", fontFamily: "'JetBrains Mono', monospace" }}>{n.published_at}</div>
-            </div>
-            <div style={{ fontSize: 12.5, color: "#b9b8c4", lineHeight: 1.6, whiteSpace: "pre-line" }}>{n.content}</div>
-          </div>
-        ))}
+        {sorted.map((n) => <NewsItem key={n.id} n={n} profile={profile} showToast={showToast} />)}
         {sorted.length === 0 && <div style={{ color: "#5c5b68", fontSize: 13 }}>Aucune actu pour le moment.</div>}
       </div>
+    </div>
+  );
+}
+
+function NewsItem({ n, profile, showToast }) {
+  const [open, setOpen] = useState(false);
+  const [comments, setComments] = useState(null);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("event_comments").select("*").eq("event_id", n.id).order("created_at", { ascending: true });
+    setComments(data || []);
+  }, [n.id]);
+
+  useEffect(() => { if (open && comments === null) load(); }, [open, comments, load]);
+
+  const post = async () => {
+    if (!text.trim()) return;
+    setBusy(true);
+    const { error } = await supabase.from("event_comments").insert({ event_id: n.id, user_id: profile.id, username: profile.username, content: text.trim() });
+    setBusy(false);
+    if (error) showToast("Erreur : " + error.message);
+    else { setText(""); load(); }
+  };
+
+  return (
+    <div style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 14, padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        {n.pinned && <span style={{ fontSize: 12 }}>📌</span>}
+        <div style={{ fontWeight: 800, fontSize: 14.5, flex: 1 }}>{n.title}</div>
+        <div style={{ fontSize: 10.5, color: "#77768a", fontFamily: "'JetBrains Mono', monospace" }}>{n.published_at}</div>
+      </div>
+      <div style={{ fontSize: 12.5, color: "#b9b8c4", lineHeight: 1.6, whiteSpace: "pre-line" }}>{n.content}</div>
+
+      <button onClick={() => setOpen((v) => !v)} style={{ all: "unset", cursor: "pointer", marginTop: 10, fontSize: 11.5, fontWeight: 700, color: "#F0A93A" }}>
+        💬 {open ? "Masquer les réponses" : `Voir / répondre${comments ? ` (${comments.length})` : ""}`}
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #24232d" }}>
+          {comments === null && <div style={{ fontSize: 11.5, color: "#5c5b68" }}>Chargement…</div>}
+          {comments && comments.length === 0 && <div style={{ fontSize: 11.5, color: "#5c5b68", marginBottom: 8 }}>Sois le premier à répondre.</div>}
+          {comments && comments.map((c) => (
+            <div key={c.id} style={{ marginBottom: 8, background: "#111117", borderRadius: 9, padding: "8px 10px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#5B8DEF", marginBottom: 2 }}>{c.username}</div>
+              <div style={{ fontSize: 12, color: "#c2c1cc", lineHeight: 1.5 }}>{c.content}</div>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Écris une réponse…" style={{ ...inputStyle, marginBottom: 0, flex: 1 }} onKeyDown={(e) => e.key === "Enter" && post()} />
+            <button disabled={busy} onClick={post} style={{ all: "unset", cursor: "pointer", padding: "0 14px", borderRadius: 10, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 12 }}>➤</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
