@@ -233,7 +233,7 @@ export default function App() {
         {tab === "specimens" && <SpecimensTab profile={profile} game={game} onOpen={setDetailChar} />}
         {tab === "shop" && <ShopTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "battle" && <BattleTab profile={profile} game={game} persistProfile={persistProfile} />}
-        {tab === "friends" && <FriendsTab profile={profile} showToast={showToast} />}
+        {tab === "friends" && <FriendsTab profile={profile} game={game} showToast={showToast} persistProfile={persistProfile} />}
         {tab === "news" && <NewsTab game={game} profile={profile} showToast={showToast} />}
         {tab === "profile" && <ProfileTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
@@ -742,25 +742,41 @@ function BattleSidePanel({ title, chars, active, align, teamColor }) {
 
 /* ---------------------------------- Amis ---------------------------------- */
 
-function FriendsTab({ profile, showToast }) {
+function FriendsTab({ profile, game, showToast, persistProfile }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [friendships, setFriendships] = useState([]);
+  const [challenges, setChallenges] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [pickingFor, setPickingFor] = useState(null); // { mode: 'new'|'respond', friend or challenge }
+  const [activeChallengeId, setActiveChallengeId] = useState(null);
 
   const loadFriendships = useCallback(async () => {
     const { data } = await supabase.from("friendships").select("*").or(`requester_id.eq.${profile.id},addressee_id.eq.${profile.id}`);
     if (!data) return;
     const ids = [...new Set(data.flatMap((f) => [f.requester_id, f.addressee_id]))].filter((id) => id !== profile.id);
     let profiles = {};
-    if (ids.length) {
-      const { data: p } = await supabase.from("profiles").select("id,username,avatar").in("id", ids);
-      (p || []).forEach((pr) => { profiles[pr.id] = pr; });
-    }
+    if (ids.length) { const { data: p } = await supabase.from("profiles").select("id,username,avatar").in("id", ids); (p || []).forEach((pr) => { profiles[pr.id] = pr; }); }
     setFriendships(data.map((f) => ({ ...f, other: profiles[f.requester_id === profile.id ? f.addressee_id : f.requester_id] })));
   }, [profile.id]);
 
-  useEffect(() => { loadFriendships(); }, [loadFriendships]);
+  const loadChallenges = useCallback(async () => {
+    const { data } = await supabase.from("battle_challenges").select("*").or(`challenger_id.eq.${profile.id},opponent_id.eq.${profile.id}`).neq("status", "declined").order("created_at", { ascending: false });
+    if (!data) return;
+    const ids = [...new Set(data.flatMap((c) => [c.challenger_id, c.opponent_id]))];
+    const { data: p } = await supabase.from("profiles").select("id,username,avatar").in("id", ids);
+    const profiles = {}; (p || []).forEach((pr) => { profiles[pr.id] = pr; });
+    setChallenges(data.map((c) => ({ ...c, challenger: profiles[c.challenger_id], opponent: profiles[c.opponent_id] })));
+  }, [profile.id]);
+
+  useEffect(() => { loadFriendships(); loadChallenges(); }, [loadFriendships, loadChallenges]);
+
+  useEffect(() => {
+    const ch = supabase.channel(`challenges-${profile.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "battle_challenges" }, () => loadChallenges())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [profile.id, loadChallenges]);
 
   const search = async (q) => {
     setQuery(q);
@@ -773,24 +789,53 @@ function FriendsTab({ profile, showToast }) {
     setBusy(true);
     const { error } = await supabase.from("friendships").insert({ requester_id: profile.id, addressee_id: target.id, status: "pending" });
     setBusy(false);
-    if (error) showToast("Erreur : " + error.message);
-    else { showToast(`Demande envoyée à ${target.username}.`); loadFriendships(); }
+    if (error) showToast("Erreur : " + error.message); else { showToast(`Demande envoyée à ${target.username}.`); loadFriendships(); }
   };
 
-  const respond = async (f, status) => {
-    await supabase.from("friendships").update({ status }).eq("id", f.id);
-    loadFriendships();
+  const respond = async (f, status) => { await supabase.from("friendships").update({ status }).eq("id", f.id); loadFriendships(); };
+
+  const createChallenge = async (friend, teamIds) => {
+    const hp = teamIds.map((id) => game.characters.find((c) => c.id === id)?.hp || 100);
+    const { error } = await supabase.from("battle_challenges").insert({
+      challenger_id: profile.id, opponent_id: friend.id, status: "pending",
+      state: { teamA: teamIds, hpA: hp, superA: teamIds.map(() => false), activeA: 0, log: [] },
+    });
+    setPickingFor(null);
+    if (error) showToast("Erreur : " + error.message); else { showToast(`Défi envoyé à ${friend.username} !`); loadChallenges(); }
   };
+
+  const acceptChallenge = async (challenge, teamIds) => {
+    const hp = teamIds.map((id) => game.characters.find((c) => c.id === id)?.hp || 100);
+    const st = challenge.state;
+    const { error } = await supabase.from("battle_challenges").update({
+      status: "fighting",
+      state: { ...st, teamB: teamIds, hpB: hp, superB: teamIds.map(() => false), activeB: 0, choiceA: null, choiceB: null, log: [...(st.log || []), "Le combat commence !"], finished: false },
+    }).eq("id", challenge.id);
+    setPickingFor(null);
+    if (error) showToast("Erreur : " + error.message); else { setActiveChallengeId(challenge.id); loadChallenges(); }
+  };
+
+  const declineChallenge = async (challenge) => { await supabase.from("battle_challenges").update({ status: "declined" }).eq("id", challenge.id); loadChallenges(); };
 
   const pending = friendships.filter((f) => f.status === "pending" && f.addressee_id === profile.id);
   const sent = friendships.filter((f) => f.status === "pending" && f.requester_id === profile.id);
   const accepted = friendships.filter((f) => f.status === "accepted");
   const friendIds = new Set(friendships.map((f) => f.other?.id));
 
+  const incomingChallenges = challenges.filter((c) => c.opponent_id === profile.id && c.status === "pending");
+  const outgoingChallenges = challenges.filter((c) => c.challenger_id === profile.id && c.status === "pending");
+  const liveChallenges = challenges.filter((c) => c.status === "fighting" && (c.challenger_id === profile.id || c.opponent_id === profile.id));
+  const owned = game.characters.filter((c) => profile.unlocked_character_ids?.includes(c.id));
+
+  if (activeChallengeId) {
+    const c = challenges.find((x) => x.id === activeChallengeId);
+    if (!c || c.status !== "fighting") { return <div style={{ padding: 20, textAlign: "center", color: "#8a8998" }}>Combat terminé ou introuvable. <button onClick={() => setActiveChallengeId(null)} style={{ all: "unset", cursor: "pointer", color: "#F0A93A", fontWeight: 700 }}>Retour</button></div>; }
+    return <FriendBattleView challenge={c} game={game} profile={profile} persistProfile={persistProfile} onExit={() => setActiveChallengeId(null)} />;
+  }
+
   return (
     <div>
-      <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 4 }}>Amis</div>
-      <div style={{ fontSize: 12, color: "#8a8998", marginBottom: 14 }}>Le défi en combat direct arrive dans une prochaine mise à jour — tu peux déjà chercher des joueurs et t'ajouter en ami.</div>
+      <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 14 }}>Amis</div>
 
       <input value={query} onChange={(e) => search(e.target.value)} placeholder="Chercher un pseudo…" style={inputStyle} />
       {results.length > 0 && (
@@ -798,15 +843,42 @@ function FriendsTab({ profile, showToast }) {
           {results.map((u) => (
             <div key={u.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span>{u.avatar || "🙂"}</span><span style={{ fontSize: 13, fontWeight: 700 }}>{u.username}</span></div>
-              {friendIds.has(u.id) ? <span style={{ fontSize: 11, color: "#5c5b68" }}>déjà lié</span> :
-                <button disabled={busy} onClick={() => sendRequest(u)} style={{ all: "unset", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#F0A93A", padding: "6px 10px", borderRadius: 8, border: "1px solid #F0A93A55" }}>+ Ajouter</button>}
+              {friendIds.has(u.id) ? <span style={{ fontSize: 11, color: "#5c5b68" }}>déjà lié</span> : <button disabled={busy} onClick={() => sendRequest(u)} style={{ all: "unset", cursor: "pointer", fontSize: 11.5, fontWeight: 700, color: "#F0A93A", padding: "6px 10px", borderRadius: 8, border: "1px solid #F0A93A55" }}>+ Ajouter</button>}
             </div>
           ))}
         </div>
       )}
 
+      {liveChallenges.length > 0 && (
+        <Section title="⚔️ Combats en cours">
+          {liveChallenges.map((c) => { const other = c.challenger_id === profile.id ? c.opponent : c.challenger; return (
+            <button key={c.id} onClick={() => setActiveChallengeId(c.id)} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", background: "linear-gradient(90deg,#2a2314,#17161f)", border: "1.5px solid #F0A93A66", borderRadius: 10, padding: "10px 12px", marginBottom: 6, fontSize: 12.5, fontWeight: 800, color: "#F0A93A" }}>Rejoindre le combat contre {other?.username || "?"} ▶</button>
+          ); })}
+        </Section>
+      )}
+
+      {incomingChallenges.length > 0 && (
+        <Section title="Défis reçus">
+          {incomingChallenges.map((c) => (
+            <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>{c.challenger?.username || "?"} te défie</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => setPickingFor({ mode: "respond", challenge: c })} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#7cd992", padding: "6px 9px", borderRadius: 8, border: "1px solid #7cd99255" }}>Répondre</button>
+                <button onClick={() => declineChallenge(c)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#ef6a6a", padding: "6px 9px", borderRadius: 8, border: "1px solid #ef6a6a55" }}>Refuser</button>
+              </div>
+            </div>
+          ))}
+        </Section>
+      )}
+
+      {outgoingChallenges.length > 0 && (
+        <Section title="Défis envoyés">
+          {outgoingChallenges.map((c) => <div key={c.id} style={{ fontSize: 12.5, color: "#8a8998", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>{c.opponent?.username || "?"} — en attente</div>)}
+        </Section>
+      )}
+
       {pending.length > 0 && (
-        <Section title="Demandes reçues">
+        <Section title="Demandes d'amis reçues">
           {pending.map((f) => (
             <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>
               <span style={{ fontSize: 13, fontWeight: 700 }}>{f.other?.username || "?"}</span>
@@ -819,23 +891,188 @@ function FriendsTab({ profile, showToast }) {
         </Section>
       )}
 
-      {sent.length > 0 && (
-        <Section title="Demandes envoyées">
-          {sent.map((f) => <div key={f.id} style={{ fontSize: 12.5, color: "#8a8998", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>{f.other?.username || "?"} — en attente</div>)}
-        </Section>
-      )}
+      {sent.length > 0 && <Section title="Demandes envoyées">{sent.map((f) => <div key={f.id} style={{ fontSize: 12.5, color: "#8a8998", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>{f.other?.username || "?"} — en attente</div>)}</Section>}
 
       <Section title={`Amis (${accepted.length})`}>
         {accepted.length === 0 && <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Aucun ami pour l'instant.</div>}
         {accepted.map((f) => (
           <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span>{f.other?.avatar || "🙂"}</span><span style={{ fontSize: 13, fontWeight: 700 }}>{f.other?.username || "?"}</span></div>
-            <span style={{ fontSize: 10.5, color: "#5c5b68" }}>défi bientôt dispo</span>
+            <button disabled={owned.length === 0} onClick={() => setPickingFor({ mode: "new", friend: f.other })} style={{ all: "unset", cursor: owned.length ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 800, color: owned.length ? "#F0A93A" : "#5c5b68", padding: "6px 10px", borderRadius: 8, border: `1px solid ${owned.length ? "#F0A93A55" : "#2a2933"}` }}>⚔️ Défier</button>
           </div>
         ))}
       </Section>
+
+      {pickingFor && (
+        <TeamPickModal
+          owned={owned}
+          onCancel={() => setPickingFor(null)}
+          onConfirm={(teamIds) => pickingFor.mode === "new" ? createChallenge(pickingFor.friend, teamIds) : acceptChallenge(pickingFor.challenge, teamIds)}
+        />
+      )}
     </div>
   );
+}
+
+function TeamPickModal({ owned, onCancel, onConfirm }) {
+  const [team, setTeam] = useState([]);
+  const toggle = (id) => setTeam((t) => t.includes(id) ? t.filter((x) => x !== id) : (t.length < 3 ? [...t, id] : t));
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.85)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 480, maxHeight: "85vh", overflowY: "auto", background: "#141319", borderRadius: "20px 20px 0 0", padding: "18px 18px 24px", border: "1px solid #F0A93A44", borderBottom: "none" }}>
+        <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 16, marginBottom: 12 }}>Choisis ton équipe ({team.length}/3)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
+          {owned.map((c) => (
+            <div key={c.id} style={{ position: "relative" }}>
+              <CharCard character={c} locked={false} onClick={() => toggle(c.id)} />
+              {team.includes(c.id) && <div style={{ position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: "50%", background: "#F0A93A", color: "#141119", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>{team.indexOf(c.id) + 1}</div>}
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onCancel} style={{ all: "unset", cursor: "pointer", flex: 1, textAlign: "center", padding: "12px 0", borderRadius: 10, background: "#232230", color: "#c2c1cc", fontWeight: 700, fontSize: 13 }}>Annuler</button>
+          <button disabled={team.length === 0} onClick={() => onConfirm(team)} style={{ all: "unset", cursor: team.length ? "pointer" : "not-allowed", flex: 2, textAlign: "center", padding: "12px 0", borderRadius: 10, background: team.length ? "linear-gradient(90deg,#F0A93A,#EC4899)" : "#232230", color: team.length ? "#141119" : "#5c5b68", fontWeight: 800, fontSize: 13 }}>Confirmer</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) {
+  const [row, setRow] = useState(challenge);
+  const isChallenger = row.challenger_id === profile.id;
+  const charById = (id) => game.characters.find((c) => c.id === id);
+
+  useEffect(() => {
+    const ch = supabase.channel(`fight-${challenge.id}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "battle_challenges", filter: `id=eq.${challenge.id}` }, (payload) => setRow(payload.new))
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [challenge.id]);
+
+  const st = row.state || {};
+  const myTeam = isChallenger ? st.teamA : st.teamB;
+  const oppTeam = isChallenger ? st.teamB : st.teamA;
+  const myHp = isChallenger ? st.hpA : st.hpB;
+  const oppHp = isChallenger ? st.hpB : st.hpA;
+  const myActive = isChallenger ? st.activeA : st.activeB;
+  const oppActive = isChallenger ? st.activeB : st.activeA;
+  const mySuper = isChallenger ? st.superA : st.superB;
+  const myChoice = isChallenger ? st.choiceA : st.choiceB;
+  const finished = st.finished;
+
+  const rewardedRef = useRef(false);
+  useEffect(() => {
+    if (finished && !rewardedRef.current) {
+      rewardedRef.current = true;
+      const iWon = (st.winner === "A" && isChallenger) || (st.winner === "B" && !isChallenger);
+      const reward = iWon ? 60 + Math.floor(Math.random() * 60) : 20;
+      persistProfile({ coins: (profile.coins || 0) + reward });
+    }
+  }, [finished]);
+
+  const chooseAction = async (moveKey) => {
+    if (myChoice) return; // already chosen, waiting for opponent
+    const patch = isChallenger ? { choiceA: moveKey } : { choiceB: moveKey };
+    let nextState = { ...st, ...patch };
+
+    // resolve only from the challenger side once both picks are in, to avoid double resolution
+    if (nextState.choiceA && nextState.choiceB) {
+      nextState = resolveFriendTurn(nextState, game);
+    }
+    await supabase.from("battle_challenges").update({ state: nextState, status: nextState.finished ? "finished" : "fighting" }).eq("id", row.id);
+  };
+
+  if (!myTeam || !oppTeam) return <div style={{ padding: 20, textAlign: "center", color: "#8a8998" }}>En attente de l'équipe adverse…</div>;
+
+  const myChar = charById(myTeam[myActive]);
+  const activeMyHp = myHp[myActive];
+
+  return (
+    <div>
+      <button onClick={onExit} style={{ all: "unset", cursor: "pointer", fontSize: 11.5, color: "#8a8998", marginBottom: 10, display: "block" }}>← Retour aux amis</button>
+      <div style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <FriendTeamPanel team={myTeam} hp={myHp} active={myActive} charById={charById} teamColor="#5B8DEF" title="Toi" />
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}><div style={{ fontSize: 20 }}>⚔️</div></div>
+          <FriendTeamPanel team={oppTeam} hp={oppHp} active={oppActive} charById={charById} teamColor="#ef6a6a" title="Adversaire" align="right" />
+        </div>
+      </div>
+
+      <div style={{ background: "#111117", border: "1px solid #232230", borderRadius: 12, padding: 12, height: 130, overflowY: "auto", marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#b9b8c4" }}>
+        {(st.log || []).map((l, i) => <div key={i}>{l}</div>)}
+      </div>
+
+      {finished ? (
+        <div style={{ textAlign: "center", padding: "18px 0" }}>
+          <div style={{ fontSize: 36 }}>{(st.winner === "A") === isChallenger ? "🏆" : "💀"}</div>
+          <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 12 }}>{(st.winner === "A") === isChallenger ? "Victoire !" : "Défaite"}</div>
+          <button onClick={onExit} style={{ all: "unset", cursor: "pointer", padding: "12px 28px", borderRadius: 12, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13.5 }}>Retour</button>
+        </div>
+      ) : myChoice ? (
+        <div style={{ textAlign: "center", padding: "14px 0", color: "#8a8998", fontSize: 13 }}>⏳ En attente de l'action de l'adversaire…</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <ActionBtn label={myChar.attack1?.name} sub={`-${myChar.attack1?.dmg || 0}`} icon="🥊" kind="attack1" onClick={() => chooseAction("attack1")} />
+          {myChar.attack2 && (myChar.attack2.dmg > 0 || myChar.attack2.heal > 0) && <ActionBtn label={myChar.attack2.name} sub={myChar.attack2.dmg ? `-${myChar.attack2.dmg}` : `+${myChar.attack2.heal} PV`} icon="💥" kind="attack2" onClick={() => chooseAction("attack2")} />}
+          {myChar.super && <ActionBtn label={myChar.super.name} sub={`SUPER · -${myChar.super.dmg}`} icon="🌟" kind="super" disabled={mySuper[myActive]} onClick={() => chooseAction("super")} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FriendTeamPanel({ team, hp, active, charById, teamColor, title, align }) {
+  return (
+    <div style={{ flex: 1 }}>
+      <div style={{ fontSize: 10, color: teamColor, fontWeight: 800, marginBottom: 8, textAlign: align === "right" ? "right" : "left", textTransform: "uppercase" }}>{title}</div>
+      {team.map((id, i) => { const c = charById(id); if (!c) return null; const pct = Math.max(0, Math.round((hp[i] / c.hp) * 100)); const isActive = i === active && hp[i] > 0; const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a"; return (
+        <div key={i} style={{ opacity: hp[i] <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
+          <div style={{ width: 34, height: 34, borderRadius: "50%", flexShrink: 0, overflow: "hidden", background: "#0e0e13", border: `2px solid ${isActive ? teamColor : "#33333f"}` }}>
+            {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2, flexDirection: align === "right" ? "row-reverse" : "row" }}>
+              <span style={{ fontWeight: isActive ? 800 : 600 }}>{c.name}</span>
+              <span style={{ color: hpColor, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>{hp[i]}/{c.hp}</span>
+            </div>
+            <div style={{ height: 6, background: "#232230", borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: hpColor }} /></div>
+          </div>
+        </div>
+      ); })}
+    </div>
+  );
+}
+
+function resolveFriendTurn(st, game) {
+  const charById = (id) => game.characters.find((c) => c.id === id);
+  const s = JSON.parse(JSON.stringify(st));
+  const charA = charById(s.teamA[s.activeA]), charB = charById(s.teamB[s.activeB]);
+  const log = [];
+  const applyMove = (attackerChar, attackerHpArr, attackerActive, attackerSuperArr, moveKey, defenderChar, defenderHpArr, defenderActive) => {
+    const move = attackerChar[moveKey]; if (!move) return;
+    const dmg = move.dmg || 0;
+    defenderHpArr[defenderActive] = Math.max(0, defenderHpArr[defenderActive] - dmg);
+    if (move.heal) attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal);
+    if (moveKey === "super") attackerSuperArr[attackerActive] = true;
+    if (dmg > 0) log.push(`${attackerChar.name} utilise ${move.name} : -${dmg} PV à ${defenderChar.name}.`);
+    if (move.heal) log.push(`${attackerChar.name} récupère ${move.heal} PV.`);
+  };
+  const order = charA.speed >= charB.speed ? ["A", "B"] : ["B", "A"];
+  for (const turn of order) {
+    if (s.hpA.every((h) => h <= 0) || s.hpB.every((h) => h <= 0)) break;
+    if (turn === "A") applyMove(charA, s.hpA, s.activeA, s.superA, s.choiceA, charB, s.hpB, s.activeB);
+    else applyMove(charB, s.hpB, s.activeB, s.superB, s.choiceB, charA, s.hpA, s.activeA);
+  }
+  while (s.activeA < s.teamA.length && s.hpA[s.activeA] <= 0) { log.push(`${charById(s.teamA[s.activeA]).name} est K.O. !`); s.activeA += 1; }
+  while (s.activeB < s.teamB.length && s.hpB[s.activeB] <= 0) { log.push(`${charById(s.teamB[s.activeB]).name} est K.O. !`); s.activeB += 1; }
+  let finished = false, winner = null;
+  if (s.activeA >= s.teamA.length) { finished = true; winner = "B"; log.push("L'équipe A est vaincue !"); }
+  else if (s.activeB >= s.teamB.length) { finished = true; winner = "A"; log.push("L'équipe B est vaincue !"); }
+  s.log = [...(s.log || []), ...log];
+  s.choiceA = null; s.choiceB = null;
+  s.finished = finished; s.winner = winner;
+  return s;
 }
 
 function Section({ title, children }) {
