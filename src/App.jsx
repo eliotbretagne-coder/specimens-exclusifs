@@ -1140,7 +1140,10 @@ function NewsItem({ n, profile, showToast }) {
           {comments && comments.length === 0 && <div style={{ fontSize: 11.5, color: "#5c5b68", marginBottom: 8 }}>Sois le premier à répondre.</div>}
           {comments && comments.map((c) => (
             <div key={c.id} style={{ marginBottom: 8, background: "#111117", borderRadius: 9, padding: "8px 10px" }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "#5B8DEF", marginBottom: 2 }}>{c.username}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: "#5B8DEF" }}>{c.username}</span>
+                {!c.approved && <span style={{ fontSize: 9, fontWeight: 700, color: "#F0A93A", background: "#2a2314", border: "1px solid #F0A93A55", borderRadius: 5, padding: "1px 6px" }}>en attente de validation</span>}
+              </div>
               <div style={{ fontSize: 12, color: "#c2c1cc", lineHeight: 1.5 }}>{c.content}</div>
             </div>
           ))}
@@ -1170,7 +1173,7 @@ function ProfileTab({ profile, game, persistProfile, showToast }) {
         <div style={{ fontSize: 44, marginBottom: 6 }}>{profile.avatar || "🙂"}</div>
         <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 17 }}>{profile.username}</div>
         <div style={{ fontSize: 11, color: "#5c5b68", marginTop: 2 }}>{profile.email}</div>
-        {profile.is_admin && <div style={{ marginTop: 8 }}><RarityTag rarity="ultra_legendary" /> <span style={{ fontSize: 11, color: "#FFD54A", fontWeight: 700 }}>Admin</span></div>}
+        {profile.is_admin && <div style={{ marginTop: 8 }}><span style={{ fontSize: 11, color: "#FFD54A", fontWeight: 800, background: "#4a3f1a", border: "1px solid #FFD54A55", borderRadius: 6, padding: "3px 9px" }}>🛠️ Administrateur</span></div>}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <MiniStat label="Pièces" value={(profile.coins ?? 0).toLocaleString("fr-FR")} icon="⭐" />
@@ -1241,6 +1244,7 @@ function AdminTab({ game, reload, showToast }) {
     { id: "items", label: "Objets" },
     { id: "boxes", label: "Boîtes" },
     { id: "events", label: "Événements" },
+    { id: "comments", label: "Commentaires" },
   ];
   const deleteRow = async (table, id) => {
     const { error } = await supabase.from(table).delete().eq("id", id);
@@ -1262,6 +1266,7 @@ function AdminTab({ game, reload, showToast }) {
       </div>
 
       {section === "events" && <AdminEvents game={game} reload={reload} showToast={showToast} deleteRow={deleteRow} />}
+      {section === "comments" && <AdminComments game={game} showToast={showToast} />}
       {section === "characters" && (<>
         <NewButton onClick={() => setEditing({ type: "characters", row: null })} label="+ Nouveau personnage" />
         <AdminList rows={game.characters} table="characters" deleteRow={deleteRow} onEdit={(r) => setEditing({ type: "characters", row: r })} renderRow={(c) => `${c.name} · ${RARITIES[c.rarity]?.label} · PTD ${c.ptd}`} />
@@ -1497,6 +1502,49 @@ function AdminEvents({ game, reload, showToast, deleteRow }) {
         <button disabled={busy} onClick={create} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", padding: "11px 0", borderRadius: 10, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13 }}>Publier</button>
       </div>
       <AdminList rows={game.events} table="game_events" deleteRow={deleteRow} onEdit={() => {}} renderRow={(n) => `${n.pinned ? "📌 " : ""}${n.title} (${n.published_at})`} />
+    </div>
+  );
+}
+
+function AdminComments({ game, showToast }) {
+  const [comments, setComments] = useState(null);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("event_comments").select("*").order("created_at", { ascending: false });
+    setComments(data || []);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const eventTitle = (id) => game.events.find((e) => e.id === id)?.title || "?";
+
+  const approve = async (c) => { await supabase.from("event_comments").update({ approved: true }).eq("id", c.id); load(); };
+  const unapprove = async (c) => { await supabase.from("event_comments").update({ approved: false }).eq("id", c.id); load(); };
+  const remove = async (c) => { await supabase.from("event_comments").delete().eq("id", c.id); showToast("Commentaire supprimé."); load(); };
+
+  if (comments === null) return <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Chargement…</div>;
+  if (comments.length === 0) return <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Aucun commentaire pour le moment.</div>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {comments.map((c) => (
+        <div key={c.id} style={{ background: "#17161f", border: `1px solid ${c.approved ? "#7cd99244" : "#F0A93A44"}`, borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: "#5B8DEF" }}>{c.username}</span>
+            <span style={{ fontSize: 9.5, color: "#5c5b68" }}>sur « {eventTitle(c.event_id)} »</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: "#c2c1cc", marginBottom: 8 }}>{c.content}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {c.approved ? (
+              <button onClick={() => unapprove(c)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#F0A93A", padding: "5px 9px", borderRadius: 8, border: "1px solid #F0A93A55" }}>Masquer</button>
+            ) : (
+              <button onClick={() => approve(c)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#7cd992", padding: "5px 9px", borderRadius: 8, border: "1px solid #7cd99255" }}>Approuver</button>
+            )}
+            <button onClick={() => remove(c)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#ef6a6a", padding: "5px 9px", borderRadius: 8, border: "1px solid #ef6a6a55" }}>Supprimer</button>
+            {!c.approved && <span style={{ fontSize: 9.5, color: "#F0A93A", marginLeft: "auto" }}>en attente</span>}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
