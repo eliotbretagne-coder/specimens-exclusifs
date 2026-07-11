@@ -234,7 +234,7 @@ export default function App() {
         {tab === "shop" && <ShopTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "battle" && <BattleTab profile={profile} game={game} persistProfile={persistProfile} />}
         {tab === "friends" && <FriendsTab profile={profile} game={game} showToast={showToast} persistProfile={persistProfile} />}
-        {tab === "news" && <NewsTab game={game} profile={profile} showToast={showToast} />}
+        {tab === "news" && <NewsTab game={game} profile={profile} showToast={showToast} persistProfile={persistProfile} />}
         {tab === "profile" && <ProfileTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
       </div>
@@ -1086,24 +1086,25 @@ function Section({ title, children }) {
 
 /* ---------------------------------- Actus ---------------------------------- */
 
-function NewsTab({ game, profile, showToast }) {
+function NewsTab({ game, profile, showToast, persistProfile }) {
   const sorted = [...game.events].sort((a, b) => (b.pinned - a.pinned) || (b.published_at || "").localeCompare(a.published_at || ""));
   return (
     <div>
       <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 14 }}>Actualités</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {sorted.map((n) => <NewsItem key={n.id} n={n} profile={profile} showToast={showToast} />)}
+        {sorted.map((n) => <NewsItem key={n.id} n={n} profile={profile} showToast={showToast} persistProfile={persistProfile} />)}
         {sorted.length === 0 && <div style={{ color: "#5c5b68", fontSize: 13 }}>Aucune actu pour le moment.</div>}
       </div>
     </div>
   );
 }
 
-function NewsItem({ n, profile, showToast }) {
+function NewsItem({ n, profile, showToast, persistProfile }) {
   const [open, setOpen] = useState(false);
   const [comments, setComments] = useState(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [claimed, setClaimed] = useState(null); // null=unknown, true/false
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("event_comments").select("*").eq("event_id", n.id).order("created_at", { ascending: true });
@@ -1111,6 +1112,20 @@ function NewsItem({ n, profile, showToast }) {
   }, [n.id]);
 
   useEffect(() => { if (open && comments === null) load(); }, [open, comments, load]);
+
+  useEffect(() => {
+    if (!n.coin_reward) return;
+    supabase.from("event_claims").select("id").eq("event_id", n.id).eq("user_id", profile.id).maybeSingle()
+      .then(({ data }) => setClaimed(!!data));
+  }, [n.id, n.coin_reward, profile.id]);
+
+  const claimReward = async () => {
+    const { error } = await supabase.from("event_claims").insert({ event_id: n.id, user_id: profile.id });
+    if (error) { showToast("Déjà réclamé ou erreur."); return; }
+    await persistProfile({ coins: (profile.coins || 0) + n.coin_reward });
+    setClaimed(true);
+    showToast(`+${n.coin_reward} pièces !`);
+  };
 
   const post = async () => {
     if (!text.trim()) return;
@@ -1129,6 +1144,23 @@ function NewsItem({ n, profile, showToast }) {
         <div style={{ fontSize: 10.5, color: "#77768a", fontFamily: "'JetBrains Mono', monospace" }}>{n.published_at}</div>
       </div>
       <div style={{ fontSize: 12.5, color: "#b9b8c4", lineHeight: 1.6, whiteSpace: "pre-line" }}>{n.content}</div>
+
+      {n.coin_reward > 0 && (
+        <button
+          disabled={claimed !== false}
+          onClick={claimReward}
+          style={{
+            all: "unset", cursor: claimed === false ? "pointer" : "default", display: "flex", alignItems: "center", gap: 8,
+            marginTop: 12, padding: "10px 14px", borderRadius: 10,
+            background: claimed === false ? "linear-gradient(90deg,#F0A93A,#FFD54A)" : "#1a1922",
+            border: claimed === false ? "none" : "1px solid #24232d",
+          }}>
+          <span>{claimed === true ? "✅" : "⭐"}</span>
+          <span style={{ fontWeight: 800, fontSize: 12.5, color: claimed === false ? "#141119" : "#5c5b68" }}>
+            {claimed === true ? "Récompense déjà réclamée" : claimed === null ? "…" : `Réclamer ${n.coin_reward} pièces`}
+          </span>
+        </button>
+      )}
 
       <button onClick={() => setOpen((v) => !v)} style={{ all: "unset", cursor: "pointer", marginTop: 10, fontSize: 11.5, fontWeight: 700, color: "#F0A93A" }}>
         💬 {open ? "Masquer les réponses" : `Voir / répondre${comments ? ` (${comments.length})` : ""}`}
@@ -1162,9 +1194,8 @@ function NewsItem({ n, profile, showToast }) {
 function ProfileTab({ profile, game, persistProfile, showToast }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const [coinInput, setCoinInput] = useState(100);
-  const charById = (id) => game.characters.find((c) => c.id === id);
   const itemById = (id) => game.items.find((i) => i.id === id);
-  const ptdTotal = (profile.unlocked_character_ids || []).reduce((s, id) => { const c = charById(id); return s + (c ? c.ptd : 0); }, 0);
+  const dailyClaimed = profile.last_daily_claim === todayStr();
 
   return (
     <div>
@@ -1175,11 +1206,23 @@ function ProfileTab({ profile, game, persistProfile, showToast }) {
         <div style={{ fontSize: 11, color: "#5c5b68", marginTop: 2 }}>{profile.email}</div>
         {profile.is_admin && <div style={{ marginTop: 8 }}><span style={{ fontSize: 11, color: "#FFD54A", fontWeight: 800, background: "#4a3f1a", border: "1px solid #FFD54A55", borderRadius: 6, padding: "3px 9px" }}>🛠️ Administrateur</span></div>}
       </div>
+
+      <button
+        disabled={dailyClaimed}
+        onClick={() => persistProfile({ coins: (profile.coins || 0) + 100, last_daily_claim: todayStr() })}
+        style={{
+          all: "unset", cursor: dailyClaimed ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+          width: "100%", boxSizing: "border-box", padding: "16px 0", borderRadius: 14, marginBottom: 14,
+          background: dailyClaimed ? "#17161f" : "linear-gradient(90deg,#F0A93A,#FFD54A)",
+          border: dailyClaimed ? "1px solid #24232d" : "none",
+        }}>
+        <span style={{ fontSize: 22 }}>{dailyClaimed ? "✅" : "🎁"}</span>
+        <span style={{ fontWeight: 800, fontSize: 14, color: dailyClaimed ? "#5c5b68" : "#141119" }}>{dailyClaimed ? "Pièces du jour déjà réclamées" : "Réclamer 100 pièces gratuites"}</span>
+      </button>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <MiniStat label="Pièces" value={(profile.coins ?? 0).toLocaleString("fr-FR")} icon="⭐" />
         <MiniStat label="Spécimens" value={`${(profile.unlocked_character_ids || []).length}/${game.characters.length}`} icon="🃏" />
-        <MiniStat label="Boîtes ouvertes" value={profile.boxes_opened ?? 0} icon="🎁" />
-        <MiniStat label="PTD total" value={ptdTotal} icon="📊" />
       </div>
 
       {profile.is_admin && (
@@ -1484,13 +1527,14 @@ function AdminEvents({ game, reload, showToast, deleteRow }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [pinned, setPinned] = useState(false);
+  const [coinReward, setCoinReward] = useState(0);
   const [busy, setBusy] = useState(false);
   const create = async () => {
     if (!title.trim() || !content.trim()) return;
     setBusy(true);
-    const { error } = await supabase.from("game_events").insert({ title, content, pinned, published_at: todayStr() });
+    const { error } = await supabase.from("game_events").insert({ title, content, pinned, coin_reward: coinReward || 0, published_at: todayStr() });
     setBusy(false);
-    if (error) showToast("Erreur : " + error.message); else { setTitle(""); setContent(""); setPinned(false); showToast("Actu publiée."); reload(); }
+    if (error) showToast("Erreur : " + error.message); else { setTitle(""); setContent(""); setPinned(false); setCoinReward(0); showToast("Actu publiée."); reload(); }
   };
   return (
     <div>
@@ -1498,10 +1542,11 @@ function AdminEvents({ game, reload, showToast, deleteRow }) {
         <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 10 }}>+ Publier une actu</div>
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Titre" style={inputStyle} />
         <textarea value={content} onChange={(e) => setContent(e.target.value)} placeholder="Contenu" rows={4} style={{ ...inputStyle, resize: "vertical", fontFamily: "'Work Sans', sans-serif" }} />
+        <Field label="Pièces offertes (0 = aucune)"><input type="number" value={coinReward} onChange={(e) => setCoinReward(parseInt(e.target.value) || 0)} style={inputStyle} /></Field>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#c2c1cc", marginBottom: 12 }}><input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} /> Épingler</label>
         <button disabled={busy} onClick={create} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", padding: "11px 0", borderRadius: 10, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13 }}>Publier</button>
       </div>
-      <AdminList rows={game.events} table="game_events" deleteRow={deleteRow} onEdit={() => {}} renderRow={(n) => `${n.pinned ? "📌 " : ""}${n.title} (${n.published_at})`} />
+      <AdminList rows={game.events} table="game_events" deleteRow={deleteRow} onEdit={() => {}} renderRow={(n) => `${n.pinned ? "📌 " : ""}${n.title}${n.coin_reward ? ` · 🎁${n.coin_reward}` : ""} (${n.published_at})`} />
     </div>
   );
 }
