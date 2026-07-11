@@ -13,6 +13,20 @@ const RARITY_ORDER = ["rare", "super_rare", "epic", "legendary", "mythic", "ultr
 const MAX_HP = 300, MAX_ATK = 150, MAX_SPEED = 10;
 const EMPTY_MOVE = { name: "", dmg: 0, heal: 0, desc: "" };
 
+const ACHIEVEMENTS = [
+  { id: "first_box", title: "Premier tirage", desc: "Ouvre ta première boîte", icon: "🎁", reward: 20, check: (p) => (p.boxes_opened || 0) >= 1 },
+  { id: "box_10", title: "Collectionneur", desc: "Ouvre 10 boîtes", icon: "📦", reward: 50, check: (p) => (p.boxes_opened || 0) >= 10 },
+  { id: "box_50", title: "Accro aux boîtes", desc: "Ouvre 50 boîtes", icon: "🧨", reward: 150, check: (p) => (p.boxes_opened || 0) >= 50 },
+  { id: "chars_5", title: "Petite collection", desc: "Débloque 5 spécimens", icon: "🃏", reward: 50, check: (p) => (p.unlocked_character_ids || []).length >= 5 },
+  { id: "chars_10", title: "Grande collection", desc: "Débloque 10 spécimens", icon: "🗂️", reward: 100, check: (p) => (p.unlocked_character_ids || []).length >= 10 },
+  { id: "chars_all", title: "Collection complète", desc: "Débloque tous les spécimens", icon: "👑", reward: 500, check: (p, g) => g && g.characters.length > 0 && (p.unlocked_character_ids || []).length >= g.characters.length },
+  { id: "win_1", title: "Premier sang", desc: "Gagne ton premier combat", icon: "🥊", reward: 30, check: (p) => (p.battles_won || 0) >= 1 },
+  { id: "win_10", title: "Vétéran", desc: "Gagne 10 combats", icon: "⚔️", reward: 100, check: (p) => (p.battles_won || 0) >= 10 },
+  { id: "win_25", title: "Champion", desc: "Gagne 25 combats", icon: "🏆", reward: 300, check: (p) => (p.battles_won || 0) >= 25 },
+  { id: "coins_1000", title: "Petit épargnant", desc: "Atteins 1000 pièces", icon: "💰", reward: 0, check: (p) => (p.coins || 0) >= 1000 },
+  { id: "trade_1", title: "Marchand", desc: "Réalise ton premier échange", icon: "🤝", reward: 50, check: (p) => (p.trades_completed || 0) >= 1 },
+];
+
 function todayStr() { return new Date().toISOString().slice(0, 10); }
 function slug(s) { return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Math.random().toString(36).slice(2, 7); }
 
@@ -217,6 +231,19 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (session) { loadProfile(session.user.id); loadGame(); } else { setProfile(null); } }, [session, loadProfile, loadGame]);
+
+  useEffect(() => {
+    if (!profile || !game) return;
+    const owned = new Set(profile.unlocked_achievement_ids || []);
+    const newly = ACHIEVEMENTS.filter((a) => !owned.has(a.id) && a.check(profile, game));
+    if (newly.length) {
+      const ids = [...owned, ...newly.map((a) => a.id)];
+      const rewardSum = newly.reduce((s, a) => s + (a.reward || 0), 0);
+      persistProfile({ unlocked_achievement_ids: ids, coins: (profile.coins || 0) + rewardSum });
+      newly.forEach((a) => showToast(`🏆 Trophée débloqué : ${a.title}${a.reward ? ` (+${a.reward} ⭐)` : ""}`));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.boxes_opened, profile?.unlocked_character_ids?.length, profile?.battles_won, profile?.coins, profile?.trades_completed, game]);
 
   const persistProfile = useCallback(async (patch) => {
     if (!profile) return;
@@ -617,7 +644,7 @@ function BattleTab({ profile, game, persistProfile }) {
       if (over || itemConsumedId) {
         const patch = {};
         if (itemConsumedId) { const stacks = { ...(profile.item_stacks || {}) }; stacks[itemConsumedId] = Math.max(0, (stacks[itemConsumedId] || 0) - 1); patch.item_stacks = stacks; }
-        if (over) { const reward = result === "win" ? 40 + Math.floor(Math.random() * 60) : 15; patch.coins = (profile.coins || 0) + reward; state.reward = reward; }
+        if (over) { const reward = result === "win" ? 40 + Math.floor(Math.random() * 60) : 15; patch.coins = (profile.coins || 0) + reward; if (result === "win") patch.battles_won = (profile.battles_won || 0) + 1; state.reward = reward; }
         persistProfile(patch);
       }
       return state;
@@ -772,9 +799,36 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
   const [results, setResults] = useState([]);
   const [friendships, setFriendships] = useState([]);
   const [challenges, setChallenges] = useState([]);
+  const [trades, setTrades] = useState([]);
   const [busy, setBusy] = useState(false);
-  const [pickingFor, setPickingFor] = useState(null); // { mode: 'new'|'respond', friend or challenge }
+  const [pickingFor, setPickingFor] = useState(null);
+  const [tradingWith, setTradingWith] = useState(null);
   const [activeChallengeId, setActiveChallengeId] = useState(null);
+
+  const loadTrades = useCallback(async () => {
+    const { data } = await supabase.from("trades").select("*").or(`proposer_id.eq.${profile.id},recipient_id.eq.${profile.id}`).neq("status", "cancelled").order("created_at", { ascending: false });
+    if (!data) return;
+    const ids = [...new Set(data.flatMap((t) => [t.proposer_id, t.recipient_id]))];
+    const { data: p } = await supabase.from("profiles").select("id,username,avatar").in("id", ids);
+    const profiles = {}; (p || []).forEach((pr) => { profiles[pr.id] = pr; });
+    const withNames = data.map((t) => ({ ...t, proposer: profiles[t.proposer_id], recipient: profiles[t.recipient_id] }));
+    setTrades(withNames);
+
+    // auto-settle any trade accepted by the other side while I was away
+    for (const t of withNames) {
+      if (t.status !== "accepted") continue;
+      const isProposer = t.proposer_id === profile.id;
+      const alreadySettled = isProposer ? t.proposer_settled : t.recipient_settled;
+      if (!alreadySettled) settleMySide(t, isProposer ? "proposer" : "recipient");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile.id]);
+
+  const settleMySide = async (trade, role) => {
+    const patch = computeTradeSettlement(trade, role, profile, game);
+    await persistProfile(patch);
+    await supabase.from("trades").update({ [`${role}_settled`]: true }).eq("id", trade.id);
+  };
 
   const loadFriendships = useCallback(async () => {
     const { data } = await supabase.from("friendships").select("*").or(`requester_id.eq.${profile.id},addressee_id.eq.${profile.id}`);
@@ -794,14 +848,17 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
     setChallenges(data.map((c) => ({ ...c, challenger: profiles[c.challenger_id], opponent: profiles[c.opponent_id] })));
   }, [profile.id]);
 
-  useEffect(() => { loadFriendships(); loadChallenges(); }, [loadFriendships, loadChallenges]);
+  useEffect(() => { loadFriendships(); loadChallenges(); loadTrades(); }, [loadFriendships, loadChallenges, loadTrades]);
 
   useEffect(() => {
     const ch = supabase.channel(`challenges-${profile.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "battle_challenges" }, () => loadChallenges())
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, [profile.id, loadChallenges]);
+    const tch = supabase.channel(`trades-${profile.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "trades" }, () => loadTrades())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); supabase.removeChannel(tch); };
+  }, [profile.id, loadChallenges, loadTrades]);
 
   const search = async (q) => {
     setQuery(q);
@@ -842,6 +899,23 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
 
   const declineChallenge = async (challenge) => { await supabase.from("battle_challenges").update({ status: "declined" }).eq("id", challenge.id); loadChallenges(); };
 
+  const proposeTrade = async (friend, offer, request) => {
+    const { error } = await supabase.from("trades").insert({ proposer_id: profile.id, recipient_id: friend.id, status: "pending", offer, request });
+    setTradingWith(null);
+    if (error) showToast("Erreur : " + error.message); else { showToast(`Offre d'échange envoyée à ${friend.username}.`); loadTrades(); }
+  };
+
+  const acceptTrade = async (trade) => {
+    const err = validateCanGive(trade.request, profile);
+    if (err) { showToast(err); return; }
+    await supabase.from("trades").update({ status: "accepted" }).eq("id", trade.id);
+    await settleMySide(trade, "recipient");
+    loadTrades();
+  };
+
+  const declineTrade = async (trade) => { await supabase.from("trades").update({ status: "declined" }).eq("id", trade.id); loadTrades(); };
+  const cancelTrade = async (trade) => { await supabase.from("trades").update({ status: "cancelled" }).eq("id", trade.id); loadTrades(); };
+
   const pending = friendships.filter((f) => f.status === "pending" && f.addressee_id === profile.id);
   const sent = friendships.filter((f) => f.status === "pending" && f.requester_id === profile.id);
   const accepted = friendships.filter((f) => f.status === "accepted");
@@ -850,6 +924,8 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
   const incomingChallenges = challenges.filter((c) => c.opponent_id === profile.id && c.status === "pending");
   const outgoingChallenges = challenges.filter((c) => c.challenger_id === profile.id && c.status === "pending");
   const liveChallenges = challenges.filter((c) => c.status === "fighting" && (c.challenger_id === profile.id || c.opponent_id === profile.id));
+  const incomingTrades = trades.filter((t) => t.recipient_id === profile.id && t.status === "pending");
+  const outgoingTrades = trades.filter((t) => t.proposer_id === profile.id && t.status === "pending");
   const owned = [...new Set(profile.unlocked_character_ids || [])].map((id) => game.characters.find((c) => c.id === id)).filter(Boolean);
 
   if (activeChallengeId) {
@@ -916,6 +992,22 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
         </Section>
       )}
 
+      {incomingTrades.length > 0 && (
+        <Section title="🤝 Échanges proposés">
+          {incomingTrades.map((t) => (
+            <TradeCard key={t.id} trade={t} game={game} otherName={t.proposer?.username} mine={false} onAccept={() => acceptTrade(t)} onDecline={() => declineTrade(t)} />
+          ))}
+        </Section>
+      )}
+
+      {outgoingTrades.length > 0 && (
+        <Section title="Échanges envoyés">
+          {outgoingTrades.map((t) => (
+            <TradeCard key={t.id} trade={t} game={game} otherName={t.recipient?.username} mine onCancel={() => cancelTrade(t)} />
+          ))}
+        </Section>
+      )}
+
       {sent.length > 0 && <Section title="Demandes envoyées">{sent.map((f) => <div key={f.id} style={{ fontSize: 12.5, color: "#8a8998", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>{f.other?.username || "?"} — en attente</div>)}</Section>}
 
       <Section title={`Amis (${accepted.length})`}>
@@ -923,7 +1015,10 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
         {accepted.map((f) => (
           <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "9px 12px", marginBottom: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span>{f.other?.avatar || "🙂"}</span><span style={{ fontSize: 13, fontWeight: 700 }}>{f.other?.username || "?"}</span></div>
-            <button disabled={owned.length === 0} onClick={() => setPickingFor({ mode: "new", friend: f.other })} style={{ all: "unset", cursor: owned.length ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 800, color: owned.length ? "#F0A93A" : "#5c5b68", padding: "6px 10px", borderRadius: 8, border: `1px solid ${owned.length ? "#F0A93A55" : "#2a2933"}` }}>⚔️ Défier</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setTradingWith(f.other)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 800, color: "#A855F7", padding: "6px 10px", borderRadius: 8, border: "1px solid #A855F755" }}>🤝 Échanger</button>
+              <button disabled={owned.length === 0} onClick={() => setPickingFor({ mode: "new", friend: f.other })} style={{ all: "unset", cursor: owned.length ? "pointer" : "not-allowed", fontSize: 11, fontWeight: 800, color: owned.length ? "#F0A93A" : "#5c5b68", padding: "6px 10px", borderRadius: 8, border: `1px solid ${owned.length ? "#F0A93A55" : "#2a2933"}` }}>⚔️ Défier</button>
+            </div>
           </div>
         ))}
       </Section>
@@ -933,6 +1028,13 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
           owned={owned}
           onCancel={() => setPickingFor(null)}
           onConfirm={(teamIds) => pickingFor.mode === "new" ? createChallenge(pickingFor.friend, teamIds) : acceptChallenge(pickingFor.challenge, teamIds)}
+        />
+      )}
+      {tradingWith && (
+        <TradeModal
+          friend={tradingWith} game={game} profile={profile}
+          onCancel={() => setTradingWith(null)}
+          onConfirm={(offer, request) => proposeTrade(tradingWith, offer, request)}
         />
       )}
     </div>
@@ -963,6 +1065,107 @@ function TeamPickModal({ owned, onCancel, onConfirm }) {
   );
 }
 
+function computeTradeSettlement(trade, role, profile, game) {
+  const give = role === "proposer" ? trade.offer : trade.request;
+  const gain = role === "proposer" ? trade.request : trade.offer;
+  let coins = profile.coins || 0;
+  coins -= give.coins || 0; coins += gain.coins || 0; coins = Math.max(0, coins);
+  let chars = [...(profile.unlocked_character_ids || [])];
+  if (give.char) chars = chars.filter((id) => id !== give.char);
+  if (gain.char && !chars.includes(gain.char)) chars.push(gain.char);
+  let stacks = { ...(profile.item_stacks || {}) };
+  let unlockedItems = [...(profile.unlocked_item_ids || [])];
+  if (give.item) stacks[give.item.id] = Math.max(0, (stacks[give.item.id] || 0) - give.item.qty);
+  if (gain.item) {
+    const itDef = game.items.find((i) => i.id === gain.item.id);
+    const limit = itDef?.stack_limit ?? 5;
+    stacks[gain.item.id] = Math.min(limit, (stacks[gain.item.id] || 0) + gain.item.qty);
+    if (!unlockedItems.includes(gain.item.id)) unlockedItems.push(gain.item.id);
+  }
+  return { coins, unlocked_character_ids: chars, item_stacks: stacks, unlocked_item_ids: unlockedItems, trades_completed: (profile.trades_completed || 0) + 1 };
+}
+
+function validateCanGive(part, profile) {
+  if ((part.coins || 0) > (profile.coins || 0)) return "Tu n'as pas assez de pièces pour accepter.";
+  if (part.char && !(profile.unlocked_character_ids || []).includes(part.char)) return "Tu ne possèdes plus ce personnage.";
+  if (part.item && (profile.item_stacks?.[part.item.id] || 0) < part.item.qty) return "Tu n'as pas assez de cet objet.";
+  return null;
+}
+
+function tradeSideLabel(part, game) {
+  const bits = [];
+  if (part.char) { const c = game.characters.find((x) => x.id === part.char); if (c) bits.push(`🃏 ${c.name}`); }
+  if (part.item) { const it = game.items.find((x) => x.id === part.item.id); if (it) bits.push(`🎒 ${it.name} ×${part.item.qty}`); }
+  if (part.coins) bits.push(`⭐ ${part.coins}`);
+  return bits.length ? bits.join(" + ") : "rien";
+}
+
+function TradeCard({ trade, game, otherName, mine, onAccept, onDecline, onCancel }) {
+  return (
+    <div style={{ background: "#17161f", border: "1px solid #A855F744", borderRadius: 10, padding: "10px 12px", marginBottom: 6 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{mine ? `À ${otherName}` : `De ${otherName}`}</div>
+      <div style={{ fontSize: 11.5, color: "#c2c1cc", marginBottom: 3 }}><span style={{ color: "#5B8DEF", fontWeight: 700 }}>{mine ? "Tu donnes" : "Il/elle donne"}</span> : {tradeSideLabel(trade.offer, game)}</div>
+      <div style={{ fontSize: 11.5, color: "#c2c1cc", marginBottom: 8 }}><span style={{ color: "#F0A93A", fontWeight: 700 }}>{mine ? "Tu demandes" : "Il/elle demande"}</span> : {tradeSideLabel(trade.request, game)}</div>
+      <div style={{ display: "flex", gap: 6 }}>
+        {onAccept && <button onClick={onAccept} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#7cd992", padding: "6px 9px", borderRadius: 8, border: "1px solid #7cd99255" }}>Accepter</button>}
+        {onDecline && <button onClick={onDecline} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#ef6a6a", padding: "6px 9px", borderRadius: 8, border: "1px solid #ef6a6a55" }}>Refuser</button>}
+        {onCancel && <button onClick={onCancel} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#8a8998", padding: "6px 9px", borderRadius: 8, border: "1px solid #2a2933" }}>Annuler</button>}
+      </div>
+    </div>
+  );
+}
+
+function TradeSidePicker({ label, part, setPart, charOptions, itemOptions, maxCoins }) {
+  return (
+    <div style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 12, padding: 12, marginBottom: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#F0A93A", marginBottom: 8 }}>{label}</div>
+      <Field label="Personnage (optionnel)">
+        <select value={part.char || ""} onChange={(e) => setPart({ ...part, char: e.target.value || null })} style={selectStyle}>
+          <option value="">Aucun</option>
+          {charOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Objet (optionnel)">
+        <div style={{ display: "flex", gap: 6 }}>
+          <select value={part.item?.id || ""} onChange={(e) => setPart({ ...part, item: e.target.value ? { id: e.target.value, qty: 1 } : null })} style={{ ...selectStyle, flex: 2 }}>
+            <option value="">Aucun</option>
+            {itemOptions.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
+          </select>
+          {part.item && <input type="number" min={1} value={part.item.qty} onChange={(e) => setPart({ ...part, item: { ...part.item, qty: Math.max(1, parseInt(e.target.value) || 1) } })} style={{ ...inputStyle, marginBottom: 0, flex: 1 }} />}
+        </div>
+      </Field>
+      <Field label={`Pièces${maxCoins != null ? ` (max ${maxCoins})` : ""}`}>
+        <input type="number" min={0} value={part.coins || 0} onChange={(e) => setPart({ ...part, coins: Math.max(0, parseInt(e.target.value) || 0) })} style={inputStyle} />
+      </Field>
+    </div>
+  );
+}
+
+function TradeModal({ friend, game, profile, onCancel, onConfirm }) {
+  const myChars = [...new Set(profile.unlocked_character_ids || [])].map((id) => game.characters.find((c) => c.id === id)).filter(Boolean);
+  const myItems = Object.entries(profile.item_stacks || {}).filter(([, n]) => n > 0).map(([id]) => game.items.find((i) => i.id === id)).filter(Boolean);
+  const [offer, setOffer] = useState({ char: null, item: null, coins: 0 });
+  const [request, setRequest] = useState({ char: null, item: null, coins: 0 });
+
+  const canSubmit = (offer.char || offer.item || offer.coins > 0) && (request.char || request.item || request.coins > 0);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.85)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 480, maxHeight: "85vh", overflowY: "auto", background: "#141319", borderRadius: "20px 20px 0 0", padding: "18px 18px 24px", border: "1px solid #A855F744", borderBottom: "none" }}>
+        <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 16, marginBottom: 4 }}>Échanger avec {friend.username}</div>
+        <div style={{ fontSize: 11.5, color: "#8a8998", marginBottom: 14 }}>Choisis ce que tu donnes et ce que tu demandes en retour.</div>
+        <TradeSidePicker label="🎁 Tu donnes" part={offer} setPart={setOffer} charOptions={myChars} itemOptions={myItems} maxCoins={profile.coins || 0} />
+        <TradeSidePicker label="🙏 Tu demandes" part={request} setPart={setRequest} charOptions={game.characters} itemOptions={game.items} />
+        <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+          <button onClick={onCancel} style={{ all: "unset", cursor: "pointer", flex: 1, textAlign: "center", padding: "12px 0", borderRadius: 10, background: "#232230", color: "#c2c1cc", fontWeight: 700, fontSize: 13 }}>Annuler</button>
+          <button disabled={!canSubmit} onClick={() => onConfirm(offer, request)} style={{ all: "unset", cursor: canSubmit ? "pointer" : "not-allowed", flex: 2, textAlign: "center", padding: "12px 0", borderRadius: 10, background: canSubmit ? "linear-gradient(90deg,#A855F7,#EC4899)" : "#232230", color: canSubmit ? "#fff" : "#5c5b68", fontWeight: 800, fontSize: 13 }}>Proposer l'échange</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) {
   const [row, setRow] = useState(challenge);
   const isChallenger = row.challenger_id === profile.id;
@@ -992,7 +1195,9 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
       rewardedRef.current = true;
       const iWon = (st.winner === "A" && isChallenger) || (st.winner === "B" && !isChallenger);
       const reward = iWon ? 60 + Math.floor(Math.random() * 60) : 20;
-      persistProfile({ coins: (profile.coins || 0) + reward });
+      const patch = { coins: (profile.coins || 0) + reward };
+      if (iWon) patch.battles_won = (profile.battles_won || 0) + 1;
+      persistProfile(patch);
     }
   }, [finished]);
 
@@ -1266,6 +1471,22 @@ function ProfileTab({ profile, game, persistProfile, showToast }) {
           </div>
         </div>
       )}
+
+      <div style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 14, padding: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: "#77768a", fontWeight: 700, marginBottom: 10, textTransform: "uppercase" }}>🏆 Trophées ({(profile.unlocked_achievement_ids || []).length}/{ACHIEVEMENTS.length})</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {ACHIEVEMENTS.map((a) => {
+            const unlocked = (profile.unlocked_achievement_ids || []).includes(a.id);
+            return (
+              <div key={a.id} style={{ background: unlocked ? "#2a2314" : "#111117", border: `1px solid ${unlocked ? "#F0A93A55" : "#232230"}`, borderRadius: 10, padding: "9px 10px", opacity: unlocked ? 1 : 0.55 }}>
+                <div style={{ fontSize: 18, marginBottom: 3 }}>{unlocked ? a.icon : "🔒"}</div>
+                <div style={{ fontSize: 10.5, fontWeight: 800, color: unlocked ? "#F0A93A" : "#8a8998" }}>{a.title}</div>
+                <div style={{ fontSize: 9.5, color: "#77768a" }}>{a.desc}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       <div style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 14, padding: 14, marginBottom: 14 }}>
         <div style={{ fontSize: 11, color: "#77768a", fontWeight: 700, marginBottom: 10, textTransform: "uppercase" }}>Objets</div>
