@@ -30,7 +30,12 @@ function rollBox(box) {
     ...(box.item_entries || []).map((e) => ({ kind: "item", id: e.item_id, p: e.probability })),
   ];
   const results = [];
-  for (let i = 0; i < (box.rewards_count || 1); i++) { const r = weightedPick(pool); if (r) results.push(r); }
+  const usedNonCoin = new Set();
+  for (let i = 0; i < (box.rewards_count || 1); i++) {
+    const available = pool.filter((e) => e.kind === "coin" || !usedNonCoin.has(e.kind + ":" + e.id));
+    const r = weightedPick(available.length ? available : pool);
+    if (r) { results.push(r); if (r.kind !== "coin") usedNonCoin.add(r.kind + ":" + r.id); }
+  }
   return results;
 }
 
@@ -406,7 +411,12 @@ function ShopTab({ profile, game, persistProfile, showToast }) {
     for (const res of r) {
       if (res.kind === "coin") coins += res.value;
       else if (res.kind === "char") { if (!unlockedC.includes(res.id)) unlockedC.push(res.id); }
-      else if (res.kind === "item") { if (!unlockedI.includes(res.id)) unlockedI.push(res.id); stacks[res.id] = (stacks[res.id] || 0) + 1; }
+      else if (res.kind === "item") {
+        if (!unlockedI.includes(res.id)) unlockedI.push(res.id);
+        const it = itemById(res.id);
+        const limit = it?.stack_limit ?? 5;
+        stacks[res.id] = Math.min(limit, (stacks[res.id] || 0) + 1);
+      }
     }
     patch.coins = box.is_free ? coins : coins - box.price;
     patch.unlocked_character_ids = unlockedC;
@@ -550,7 +560,8 @@ function RewardCard({ res, charById, itemById, revealing }) {
 /* ---------------------------------- Combat ---------------------------------- */
 
 function BattleTab({ profile, game, persistProfile }) {
-  const owned = game.characters.filter((c) => profile.unlocked_character_ids?.includes(c.id));
+  const ownedIds = [...new Set(profile.unlocked_character_ids || [])];
+  const owned = ownedIds.map((id) => game.characters.find((c) => c.id === id)).filter(Boolean);
   const [team, setTeam] = useState([]);
   const [fight, setFight] = useState(null);
   const logRef = useRef(null);
@@ -575,35 +586,34 @@ function BattleTab({ profile, game, persistProfile }) {
       if (!f || f.over) return f;
       const state = JSON.parse(JSON.stringify(f));
       const p = state.player, b = state.bot;
-      const pc = p.chars[p.active], bc = b.chars[b.active];
-      const log = []; let itemConsumedId = null;
-      if (playerAction.type === "item") { pc.buff += playerAction.item.atk_bonus || 0; log.push(`🎒 Tu utilises ${playerAction.item.name} sur ${pc.name}.`); itemConsumedId = playerAction.item.id; }
+      const pIdx = p.active, bIdx = b.active;
+      const pc = p.chars[pIdx], bc = b.chars[bIdx];
+      const log = []; const hits = []; let itemConsumedId = null;
+      if (playerAction.type === "item") { pc.buff += playerAction.item.atk_bonus || 0; log.push(`🎒 ${playerAction.item.name} sur ${pc.name}`); itemConsumedId = playerAction.item.id; }
       const botMoves = ["attack1", bc.attack2 && (bc.attack2.dmg || bc.attack2.heal) ? "attack2" : null, !bc.superUsed ? "super" : null].filter(Boolean);
       const botMoveKey = botMoves[Math.floor(Math.random() * botMoves.length)] || "attack1";
       const playerMoveKey = playerAction.type === "move" ? playerAction.moveKey : "attack1";
-      const applyMove = (attacker, defender, moveKey, isSuper) => {
-        const move = attacker[moveKey]; if (!move) return [];
+      const applyMove = (side, attacker, defender, moveKey, isSuper) => {
+        const move = attacker[moveKey]; if (!move) return;
         const dmg = Math.round((move.dmg || 0) * (1 + (attacker.buff || 0) / 100));
         defender.curHp = Math.max(0, defender.curHp - dmg);
-        if (move.heal) attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal);
+        if (dmg > 0) { hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dmg, kind: "dmg" }); log.push(`${attacker.name} ▸ ${move.name} : -${dmg}`); }
+        if (move.heal) { attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal); hits.push({ side, index: side === "p" ? pIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attacker.name} soigné +${move.heal}`); }
         if (isSuper) attacker.superUsed = true;
-        const parts = [];
-        if (dmg > 0) parts.push(`${attacker.name} utilise ${move.name} : -${dmg} PV à ${defender.name}.`);
-        if (move.heal) parts.push(`${attacker.name} récupère ${move.heal} PV.`);
-        return parts;
       };
       const order = pc.speed >= bc.speed ? ["p", "bot"] : ["bot", "p"];
       for (const turn of order) {
         if (state.player.chars.every((c) => c.curHp <= 0) || state.bot.chars.every((c) => c.curHp <= 0)) break;
-        if (turn === "p") log.push(...applyMove(pc, bc, playerMoveKey, playerMoveKey === "super"));
-        else log.push(...applyMove(bc, pc, botMoveKey, botMoveKey === "super"));
+        if (turn === "p") applyMove("p", pc, bc, playerMoveKey, playerMoveKey === "super");
+        else applyMove("bot", bc, pc, botMoveKey, botMoveKey === "super");
       }
-      const advance = (side) => { while (side.active < side.chars.length && side.chars[side.active].curHp <= 0) { log.push(`${side.chars[side.active].name} est K.O. !`); side.active += 1; } };
+      const advance = (side) => { while (side.active < side.chars.length && side.chars[side.active].curHp <= 0) { log.push(`${side.chars[side.active].name} K.O.`); side.active += 1; } };
       advance(p); advance(b);
       let over = false, result = null;
       if (p.active >= p.chars.length) { over = true; result = "lose"; log.push("Défaite..."); }
       else if (b.active >= b.chars.length) { over = true; result = "win"; log.push("Victoire ! 🎉"); }
       state.log = [...state.log, ...log]; state.over = over; state.result = result;
+      state.lastHits = hits; state.turnId = (f.turnId || 0) + 1;
       if (over || itemConsumedId) {
         const patch = {};
         if (itemConsumedId) { const stacks = { ...(profile.item_stacks || {}) }; stacks[itemConsumedId] = Math.max(0, (stacks[itemConsumedId] || 0) - 1); patch.item_stacks = stacks; }
@@ -624,12 +634,12 @@ function BattleTab({ profile, game, persistProfile }) {
         <style>{`@keyframes activeGlow { 0%,100%{ box-shadow: 0 0 0 3px #F0A93A, 0 0 18px #F0A93A88;} 50%{ box-shadow: 0 0 0 3px #FFD54A, 0 0 26px #FFD54Aaa;} }`}</style>
         <div style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12 }}>
           <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-            <BattleSidePanel title="Ton équipe" chars={p.chars} active={p.active} teamColor="#5B8DEF" />
+            <BattleSidePanel title="Ton équipe" chars={p.chars} active={p.active} teamColor="#5B8DEF" hits={fight.lastHits} turnId={fight.turnId} sideKey="p" />
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
               <div style={{ fontSize: 22 }}>⚔️</div>
               <div style={{ fontSize: 9, color: "#8a8998", fontWeight: 800 }}>VS</div>
             </div>
-            <BattleSidePanel title="Adversaire" chars={b.chars} active={b.active} align="right" teamColor="#ef6a6a" />
+            <BattleSidePanel title="Adversaire" chars={b.chars} active={b.active} align="right" teamColor="#ef6a6a" hits={fight.lastHits} turnId={fight.turnId} sideKey="bot" />
           </div>
         </div>
         <div ref={logRef} style={{ background: "#111117", border: "1px solid #232230", borderRadius: 12, padding: 12, height: 130, overflowY: "auto", margin: "12px 0", fontSize: 12, lineHeight: 1.6, color: "#b9b8c4" }}>{fight.log.map((l, i) => <div key={i}>{l}</div>)}</div>
@@ -709,22 +719,37 @@ function ActionBtn({ label, sub, icon, onClick, disabled, kind }) {
   );
 }
 
-function BattleSidePanel({ title, chars, active, align, teamColor }) {
+function FloatingHit({ amount, kind, hitKey }) {
+  return (
+    <div key={hitKey} style={{
+      position: "absolute", right: -2, top: -4, fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, fontSize: 16,
+      color: kind === "heal" ? "#7cd992" : "#ff5252", textShadow: "0 2px 6px rgba(0,0,0,0.7), 0 0 10px rgba(0,0,0,0.5)",
+      animation: "floatHit 1.1s ease-out forwards", pointerEvents: "none", zIndex: 6,
+    }}>{kind === "heal" ? "+" : "-"}{amount}</div>
+  );
+}
+
+function BattleSidePanel({ title, chars, active, align, teamColor, hits, turnId, sideKey }) {
   return (
     <div style={{ flex: 1 }}>
+      <style>{`@keyframes floatHit { 0%{ opacity:0; transform: translateY(4px) scale(0.6);} 15%{opacity:1; transform: translateY(-4px) scale(1.25);} 100%{ opacity:0; transform: translateY(-34px) scale(1);} }`}</style>
       <div style={{ fontSize: 10, color: teamColor, fontWeight: 800, marginBottom: 8, textAlign: align === "right" ? "right" : "left", textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</div>
       {chars.map((c, i) => {
         const pct = Math.max(0, Math.round((c.curHp / c.hp) * 100));
         const isActive = i === active && c.curHp > 0;
         const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a";
+        const hit = (hits || []).find((h) => h.side === sideKey && h.index === i);
         return (
           <div key={i} style={{ opacity: c.curHp <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
-            <div style={{
-              width: 34, height: 34, borderRadius: "50%", flexShrink: 0, overflow: "hidden", background: "#0e0e13",
-              border: `2px solid ${isActive ? teamColor : "#33333f"}`,
-              animation: isActive ? "activeGlow 1s ease-in-out infinite" : undefined,
-            }}>
-              {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
+            <div style={{ position: "relative", width: 34, height: 34, flexShrink: 0 }}>
+              <div style={{
+                width: 34, height: 34, borderRadius: "50%", overflow: "hidden", background: "#0e0e13",
+                border: `2px solid ${isActive ? teamColor : "#33333f"}`,
+                animation: isActive ? "activeGlow 1s ease-in-out infinite" : undefined,
+              }}>
+                {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
+              </div>
+              {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} />}
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2, flexDirection: align === "right" ? "row-reverse" : "row" }}>
@@ -825,7 +850,7 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
   const incomingChallenges = challenges.filter((c) => c.opponent_id === profile.id && c.status === "pending");
   const outgoingChallenges = challenges.filter((c) => c.challenger_id === profile.id && c.status === "pending");
   const liveChallenges = challenges.filter((c) => c.status === "fighting" && (c.challenger_id === profile.id || c.opponent_id === profile.id));
-  const owned = game.characters.filter((c) => profile.unlocked_character_ids?.includes(c.id));
+  const owned = [...new Set(profile.unlocked_character_ids || [])].map((id) => game.characters.find((c) => c.id === id)).filter(Boolean);
 
   if (activeChallengeId) {
     const c = challenges.find((x) => x.id === activeChallengeId);
@@ -993,9 +1018,9 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
       <button onClick={onExit} style={{ all: "unset", cursor: "pointer", fontSize: 11.5, color: "#8a8998", marginBottom: 10, display: "block" }}>← Retour aux amis</button>
       <div style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12 }}>
         <div style={{ display: "flex", gap: 8 }}>
-          <FriendTeamPanel team={myTeam} hp={myHp} active={myActive} charById={charById} teamColor="#5B8DEF" title="Toi" />
+          <FriendTeamPanel team={myTeam} hp={myHp} active={myActive} charById={charById} teamColor="#5B8DEF" title="Toi" hits={st.lastHits} turnId={st.turnCount} sideLetter={isChallenger ? "A" : "B"} />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}><div style={{ fontSize: 20 }}>⚔️</div></div>
-          <FriendTeamPanel team={oppTeam} hp={oppHp} active={oppActive} charById={charById} teamColor="#ef6a6a" title="Adversaire" align="right" />
+          <FriendTeamPanel team={oppTeam} hp={oppHp} active={oppActive} charById={charById} teamColor="#ef6a6a" title="Adversaire" align="right" hits={st.lastHits} turnId={st.turnCount} sideLetter={isChallenger ? "B" : "A"} />
         </div>
       </div>
 
@@ -1022,14 +1047,19 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
   );
 }
 
-function FriendTeamPanel({ team, hp, active, charById, teamColor, title, align }) {
+function FriendTeamPanel({ team, hp, active, charById, teamColor, title, align, hits, turnId, sideLetter }) {
   return (
     <div style={{ flex: 1 }}>
       <div style={{ fontSize: 10, color: teamColor, fontWeight: 800, marginBottom: 8, textAlign: align === "right" ? "right" : "left", textTransform: "uppercase" }}>{title}</div>
-      {team.map((id, i) => { const c = charById(id); if (!c) return null; const pct = Math.max(0, Math.round((hp[i] / c.hp) * 100)); const isActive = i === active && hp[i] > 0; const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a"; return (
+      {team.map((id, i) => { const c = charById(id); if (!c) return null; const pct = Math.max(0, Math.round((hp[i] / c.hp) * 100)); const isActive = i === active && hp[i] > 0; const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a";
+        const hit = (hits || []).find((h) => h.side === sideLetter && h.index === i);
+        return (
         <div key={i} style={{ opacity: hp[i] <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
-          <div style={{ width: 34, height: 34, borderRadius: "50%", flexShrink: 0, overflow: "hidden", background: "#0e0e13", border: `2px solid ${isActive ? teamColor : "#33333f"}` }}>
-            {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
+          <div style={{ position: "relative", width: 34, height: 34, flexShrink: 0 }}>
+            <div style={{ width: 34, height: 34, borderRadius: "50%", overflow: "hidden", background: "#0e0e13", border: `2px solid ${isActive ? teamColor : "#33333f"}` }}>
+              {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
+            </div>
+            {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} />}
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2, flexDirection: align === "right" ? "row-reverse" : "row" }}>
@@ -1047,31 +1077,32 @@ function FriendTeamPanel({ team, hp, active, charById, teamColor, title, align }
 function resolveFriendTurn(st, game) {
   const charById = (id) => game.characters.find((c) => c.id === id);
   const s = JSON.parse(JSON.stringify(st));
-  const charA = charById(s.teamA[s.activeA]), charB = charById(s.teamB[s.activeB]);
-  const log = [];
-  const applyMove = (attackerChar, attackerHpArr, attackerActive, attackerSuperArr, moveKey, defenderChar, defenderHpArr, defenderActive) => {
+  const aIdx = s.activeA, bIdx = s.activeB;
+  const charA = charById(s.teamA[aIdx]), charB = charById(s.teamB[bIdx]);
+  const log = []; const hits = [];
+  const applyMove = (side, attackerChar, attackerHpArr, attackerActive, attackerSuperArr, moveKey, defenderChar, defenderHpArr, defenderActive) => {
     const move = attackerChar[moveKey]; if (!move) return;
     const dmg = move.dmg || 0;
     defenderHpArr[defenderActive] = Math.max(0, defenderHpArr[defenderActive] - dmg);
-    if (move.heal) attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal);
     if (moveKey === "super") attackerSuperArr[attackerActive] = true;
-    if (dmg > 0) log.push(`${attackerChar.name} utilise ${move.name} : -${dmg} PV à ${defenderChar.name}.`);
-    if (move.heal) log.push(`${attackerChar.name} récupère ${move.heal} PV.`);
+    if (dmg > 0) { hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dmg, kind: "dmg" }); log.push(`${attackerChar.name} ▸ ${move.name} : -${dmg}`); }
+    if (move.heal) { attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal); hits.push({ side, index: side === "A" ? aIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attackerChar.name} soigné +${move.heal}`); }
   };
   const order = charA.speed >= charB.speed ? ["A", "B"] : ["B", "A"];
   for (const turn of order) {
     if (s.hpA.every((h) => h <= 0) || s.hpB.every((h) => h <= 0)) break;
-    if (turn === "A") applyMove(charA, s.hpA, s.activeA, s.superA, s.choiceA, charB, s.hpB, s.activeB);
-    else applyMove(charB, s.hpB, s.activeB, s.superB, s.choiceB, charA, s.hpA, s.activeA);
+    if (turn === "A") applyMove("A", charA, s.hpA, s.activeA, s.superA, s.choiceA, charB, s.hpB, s.activeB);
+    else applyMove("B", charB, s.hpB, s.activeB, s.superB, s.choiceB, charA, s.hpA, s.activeA);
   }
-  while (s.activeA < s.teamA.length && s.hpA[s.activeA] <= 0) { log.push(`${charById(s.teamA[s.activeA]).name} est K.O. !`); s.activeA += 1; }
-  while (s.activeB < s.teamB.length && s.hpB[s.activeB] <= 0) { log.push(`${charById(s.teamB[s.activeB]).name} est K.O. !`); s.activeB += 1; }
+  while (s.activeA < s.teamA.length && s.hpA[s.activeA] <= 0) { log.push(`${charById(s.teamA[s.activeA]).name} K.O.`); s.activeA += 1; }
+  while (s.activeB < s.teamB.length && s.hpB[s.activeB] <= 0) { log.push(`${charById(s.teamB[s.activeB]).name} K.O.`); s.activeB += 1; }
   let finished = false, winner = null;
   if (s.activeA >= s.teamA.length) { finished = true; winner = "B"; log.push("L'équipe A est vaincue !"); }
   else if (s.activeB >= s.teamB.length) { finished = true; winner = "A"; log.push("L'équipe B est vaincue !"); }
   s.log = [...(s.log || []), ...log];
   s.choiceA = null; s.choiceB = null;
   s.finished = finished; s.winner = winner;
+  s.lastHits = hits; s.turnCount = (s.turnCount || 0) + 1;
   return s;
 }
 
@@ -1242,10 +1273,10 @@ function ProfileTab({ profile, game, persistProfile, showToast }) {
           <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Aucun objet pour le moment.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {Object.entries(profile.item_stacks || {}).filter(([, n]) => n > 0).map(([id, n]) => { const it = itemById(id); if (!it) return null; return (
+            {Object.entries(profile.item_stacks || {}).filter(([, n]) => n > 0).map(([id, n]) => { const it = itemById(id); if (!it) return null; const limit = it.stack_limit ?? 5; return (
               <div key={id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div><div style={{ fontWeight: 700, fontSize: 12.5 }}>{it.name}</div><div style={{ fontSize: 10.5, color: "#8a8998" }}>{it.effect}</div></div>
-                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, color: "#A855F7" }}>×{n}</div>
+                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, color: n >= limit ? "#ef6a6a" : "#A855F7" }}>{n}/{limit}</div>
               </div>
             ); })}
           </div>
@@ -1364,6 +1395,45 @@ function Field({ label, children }) {
   return (<div style={{ marginBottom: 4 }}><div style={{ fontSize: 10.5, color: "#77768a", fontWeight: 700, marginBottom: 4, textTransform: "uppercase" }}>{label}</div>{children}</div>);
 }
 
+function ImageUploadField({ label, value, onChange, folder }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const inputRef = useRef(null);
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setErr(""); setBusy(true);
+    try {
+      const path = `${folder}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]+/g, "-")}`;
+      const { error } = await supabase.storage.from("game-images").upload(path, file, { upsert: false });
+      if (error) throw error;
+      const { data } = supabase.storage.from("game-images").getPublicUrl(path);
+      onChange(data.publicUrl);
+    } catch (e2) { setErr(e2.message || "Échec de l'envoi de l'image."); }
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = "";
+  };
+
+  return (
+    <Field label={label}>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 10, overflow: "hidden", background: "#0e0e13", border: "1px solid #2a2933", flexShrink: 0 }}>
+          {value ? <img src={value} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🖼️</div>}
+        </div>
+        <label style={{ cursor: "pointer", flex: 1 }}>
+          <div style={{ textAlign: "center", padding: "10px 0", borderRadius: 10, background: "#232230", border: "1.5px dashed #3a3945", fontSize: 12, fontWeight: 700, color: busy ? "#5c5b68" : "#F0A93A" }}>
+            {busy ? "Envoi en cours…" : "📷 Choisir dans la galerie"}
+          </div>
+          <input ref={inputRef} type="file" accept="image/*" onChange={handleFile} disabled={busy} style={{ display: "none" }} />
+        </label>
+      </div>
+      <input value={value || ""} onChange={(e) => onChange(e.target.value)} placeholder="ou colle une URL d'image" style={inputStyle} />
+      {err && <div style={{ color: "#ef6a6a", fontSize: 11, marginBottom: 6 }}>{err}</div>}
+    </Field>
+  );
+}
+
 function MoveFields({ label, move, onChange }) {
   const m = move || EMPTY_MOVE;
   const set = (patch) => onChange({ ...m, ...patch });
@@ -1397,7 +1467,7 @@ function CharacterForm({ row, onDone, onCancel, showToast }) {
       <Field label="Nom"><input value={f.name} onChange={(e) => set({ name: e.target.value })} style={inputStyle} /></Field>
       <Field label="Rareté"><select value={f.rarity} onChange={(e) => set({ rarity: e.target.value })} style={selectStyle}>{RARITY_ORDER.map((r) => <option key={r} value={r}>{RARITIES[r].label}</option>)}</select></Field>
       <Field label="Habitat"><input value={f.habitat || ""} onChange={(e) => set({ habitat: e.target.value })} style={inputStyle} /></Field>
-      <Field label="Image (URL)"><input value={f.image_url || ""} onChange={(e) => set({ image_url: e.target.value })} style={inputStyle} /></Field>
+      <ImageUploadField label="Image" value={f.image_url} onChange={(url) => set({ image_url: url })} folder="characters" />
       <Field label="Description"><textarea value={f.description || ""} onChange={(e) => set({ description: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "'Work Sans', sans-serif" }} /></Field>
       <div style={{ display: "flex", gap: 8 }}>
         <Field label="PV"><input type="number" value={f.hp} onChange={(e) => set({ hp: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
@@ -1412,7 +1482,7 @@ function CharacterForm({ row, onDone, onCancel, showToast }) {
 }
 
 function ItemForm({ row, onDone, onCancel, showToast }) {
-  const [f, setF] = useState(row || { name: "", rarity: "rare", description: "", effect: "", image_url: "", atk_bonus: 10 });
+  const [f, setF] = useState(row || { name: "", rarity: "rare", description: "", effect: "", image_url: "", atk_bonus: 10, stack_limit: 5 });
   const [busy, setBusy] = useState(false);
   const set = (patch) => setF((v) => ({ ...v, ...patch }));
   const submit = async () => {
@@ -1427,9 +1497,12 @@ function ItemForm({ row, onDone, onCancel, showToast }) {
     <FormShell title={row ? "Modifier l'objet" : "Nouvel objet"} onCancel={onCancel} onSubmit={submit} busy={busy}>
       <Field label="Nom"><input value={f.name} onChange={(e) => set({ name: e.target.value })} style={inputStyle} /></Field>
       <Field label="Rareté"><select value={f.rarity} onChange={(e) => set({ rarity: e.target.value })} style={selectStyle}>{RARITY_ORDER.map((r) => <option key={r} value={r}>{RARITIES[r].label}</option>)}</select></Field>
-      <Field label="Image (URL)"><input value={f.image_url || ""} onChange={(e) => set({ image_url: e.target.value })} style={inputStyle} /></Field>
+      <ImageUploadField label="Image" value={f.image_url} onChange={(url) => set({ image_url: url })} folder="items" />
       <Field label="Effet (texte affiché)"><input value={f.effect || ""} onChange={(e) => set({ effect: e.target.value })} style={inputStyle} /></Field>
-      <Field label="Bonus d'attaque en combat (%)"><input type="number" value={f.atk_bonus} onChange={(e) => set({ atk_bonus: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Field label="Bonus d'attaque en combat (%)"><input type="number" value={f.atk_bonus} onChange={(e) => set({ atk_bonus: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
+        <Field label="Limite de stock par joueur"><input type="number" min={1} value={f.stack_limit ?? 5} onChange={(e) => set({ stack_limit: Math.max(1, parseInt(e.target.value) || 1) })} style={inputStyle} /></Field>
+      </div>
       <Field label="Description"><textarea value={f.description || ""} onChange={(e) => set({ description: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "'Work Sans', sans-serif" }} /></Field>
     </FormShell>
   );
@@ -1464,7 +1537,7 @@ function BoxForm({ row, game, onDone, onCancel, showToast }) {
   return (
     <FormShell title={row ? "Modifier la boîte" : "Nouvelle boîte"} onCancel={onCancel} onSubmit={submit} busy={busy}>
       <Field label="Nom"><input value={f.name} onChange={(e) => set({ name: e.target.value })} style={inputStyle} /></Field>
-      <Field label="Image (URL)"><input value={f.image_url || ""} onChange={(e) => set({ image_url: e.target.value })} style={inputStyle} /></Field>
+      <ImageUploadField label="Image" value={f.image_url} onChange={(url) => set({ image_url: url })} folder="boxes" />
       <Field label="Description"><input value={f.description || ""} onChange={(e) => set({ description: e.target.value })} style={inputStyle} /></Field>
       <div style={{ display: "flex", gap: 8 }}>
         <Field label="Prix"><input type="number" value={f.price} onChange={(e) => set({ price: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
