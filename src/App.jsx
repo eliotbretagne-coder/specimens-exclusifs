@@ -260,6 +260,19 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#0e0e13", color: "#f4f2ec", fontFamily: "'Work Sans', sans-serif", paddingBottom: 78 }}>
+      <style>{`
+        @keyframes floatHit { 0%{ opacity:0; transform: translateY(4px) scale(0.6);} 15%{opacity:1; transform: translateY(-4px) scale(1.25);} 100%{ opacity:0; transform: translateY(-34px) scale(1);} }
+        @keyframes activeGlow { 0%,100%{ box-shadow: 0 0 0 3px #F0A93A, 0 0 18px #F0A93A88;} 50%{ box-shadow: 0 0 0 3px #FFD54A, 0 0 26px #FFD54Aaa;} }
+        @keyframes superGlowPulse { 0%,100%{ box-shadow: 0 0 0 3px #FFD54A, 0 0 14px #FFD54Aaa;} 50%{ box-shadow: 0 0 0 5px #FFD54A, 0 0 26px #FFD54Add;} }
+        @keyframes lungeRight { 0%{ transform: translateX(0);} 30%{ transform: translateX(10px) scale(1.1);} 60%{ transform: translateX(-2px);} 100%{ transform: translateX(0);} }
+        @keyframes lungeLeft { 0%{ transform: translateX(0);} 30%{ transform: translateX(-10px) scale(1.1);} 60%{ transform: translateX(2px);} 100%{ transform: translateX(0);} }
+        @keyframes hitShake { 0%,100%{ transform: translateX(0);} 20%{ transform: translateX(-4px);} 40%{ transform: translateX(4px);} 60%{ transform: translateX(-3px);} 80%{ transform: translateX(3px);} }
+        @keyframes hitFlash { 0%{ box-shadow: 0 0 0 7px rgba(255,255,255,0.95);} 100%{ box-shadow: 0 0 0 0 rgba(255,255,255,0);} }
+        @keyframes shakeArena { 0%,100%{ transform: translate(0,0);} 20%{ transform: translate(-3px,2px);} 40%{ transform: translate(3px,-2px);} 60%{ transform: translate(-2px,1px);} 80%{ transform: translate(2px,-1px);} }
+        @keyframes poofKO { 0%{ opacity:1; transform: scale(0.6);} 40%{ opacity:1; transform: scale(1.35);} 100%{ opacity:0; transform: scale(1.9);} }
+        @keyframes vignettePulse { 0%,100%{ opacity:0.3;} 50%{ opacity:0.7;} }
+        @keyframes hpBleed { from{ opacity: 0.9; } to{ opacity: 0; } }
+      `}</style>
       <TopBar profile={profile} menuOpen={menuOpen} setMenuOpen={setMenuOpen} onLogout={() => supabase.auth.signOut()} />
       <div style={{ maxWidth: 480, margin: "0 auto", padding: "14px 14px 24px" }}>
         {tab === "specimens" && <SpecimensTab profile={profile} game={game} onOpen={setDetailChar} />}
@@ -624,8 +637,8 @@ function BattleTab({ profile, game, persistProfile }) {
         const move = attacker[moveKey]; if (!move) return;
         const dmg = Math.round((move.dmg || 0) * (1 + (attacker.buff || 0) / 100));
         defender.curHp = Math.max(0, defender.curHp - dmg);
-        if (dmg > 0) { hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dmg, kind: "dmg" }); log.push(`${attacker.name} ▸ ${move.name} : -${dmg}`); }
-        if (move.heal) { attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal); hits.push({ side, index: side === "p" ? pIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attacker.name} soigné +${move.heal}`); }
+        if (dmg > 0) { hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dmg, kind: "dmg", superMove: isSuper }); log.push(`${attacker.name} ▸ ${move.name} : -${dmg}`); }
+        if (move.heal) { attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal); hits.push({ side, index: side === "p" ? pIdx : bIdx, amount: move.heal, kind: "heal", superMove: isSuper }); log.push(`${attacker.name} soigné +${move.heal}`); }
         if (isSuper) attacker.superUsed = true;
       };
       const order = pc.speed >= bc.speed ? ["p", "bot"] : ["bot", "p"];
@@ -656,10 +669,12 @@ function BattleTab({ profile, game, persistProfile }) {
     const pc = p.chars[Math.min(p.active, p.chars.length - 1)];
     const myItems = Object.entries(profile.item_stacks || {}).filter(([, n]) => n > 0);
     const itemById = (id) => game.items.find((i) => i.id === id);
+    const bigHit = (fight.lastHits || []).some((h) => h.kind === "dmg" && h.amount >= 50);
+    const lowHp = pc && pc.curHp > 0 && pc.curHp / pc.hp <= 0.25;
     return (
-      <div>
-        <style>{`@keyframes activeGlow { 0%,100%{ box-shadow: 0 0 0 3px #F0A93A, 0 0 18px #F0A93A88;} 50%{ box-shadow: 0 0 0 3px #FFD54A, 0 0 26px #FFD54Aaa;} }`}</style>
-        <div style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12 }}>
+      <div style={{ position: "relative" }}>
+        {lowHp && <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 250, boxShadow: "inset 0 0 90px 20px rgba(239,106,106,0.55)", animation: "vignettePulse 1.1s ease-in-out infinite" }} />}
+        <div key={fight.turnId} style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12, animation: bigHit ? "shakeArena 0.4s ease-out" : undefined }}>
           <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
             <BattleSidePanel title="Ton équipe" chars={p.chars} active={p.active} teamColor="#5B8DEF" hits={fight.lastHits} turnId={fight.turnId} sideKey="p" />
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2 }}>
@@ -746,6 +761,27 @@ function ActionBtn({ label, sub, icon, onClick, disabled, kind }) {
   );
 }
 
+function HpBar({ pct, color }) {
+  const [trailPct, setTrailPct] = useState(pct);
+  const prevRef = useRef(pct);
+  useEffect(() => {
+    if (pct < prevRef.current) {
+      setTrailPct(prevRef.current);
+      const t = setTimeout(() => setTrailPct(pct), 50);
+      prevRef.current = pct;
+      return () => clearTimeout(t);
+    }
+    prevRef.current = pct;
+    setTrailPct(pct);
+  }, [pct]);
+  return (
+    <div style={{ height: 6, background: "#232230", borderRadius: 4, overflow: "hidden", position: "relative" }}>
+      <div style={{ position: "absolute", inset: 0, width: `${trailPct}%`, background: "#ff8a5299", transition: "width 0.6s ease-out" }} />
+      <div style={{ position: "absolute", inset: 0, width: `${pct}%`, background: color, boxShadow: `0 0 6px ${color}` }} />
+    </div>
+  );
+}
+
 function FloatingHit({ amount, kind, hitKey }) {
   return (
     <div key={hitKey} style={{
@@ -759,31 +795,34 @@ function FloatingHit({ amount, kind, hitKey }) {
 function BattleSidePanel({ title, chars, active, align, teamColor, hits, turnId, sideKey }) {
   return (
     <div style={{ flex: 1 }}>
-      <style>{`@keyframes floatHit { 0%{ opacity:0; transform: translateY(4px) scale(0.6);} 15%{opacity:1; transform: translateY(-4px) scale(1.25);} 100%{ opacity:0; transform: translateY(-34px) scale(1);} }`}</style>
       <div style={{ fontSize: 10, color: teamColor, fontWeight: 800, marginBottom: 8, textAlign: align === "right" ? "right" : "left", textTransform: "uppercase", letterSpacing: 0.4 }}>{title}</div>
       {chars.map((c, i) => {
         const pct = Math.max(0, Math.round((c.curHp / c.hp) * 100));
         const isActive = i === active && c.curHp > 0;
         const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a";
         const hit = (hits || []).find((h) => h.side === sideKey && h.index === i);
+        const isKO = hit && hit.kind === "dmg" && c.curHp <= 0;
+        const isAttacker = (hits || []).some((h) => h.kind === "dmg" && h.side !== sideKey && i === active);
+        const superHit = isAttacker && (hits || []).find((h) => h.kind === "dmg" && h.side !== sideKey)?.superMove;
         return (
           <div key={i} style={{ opacity: c.curHp <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
-            <div style={{ position: "relative", width: 34, height: 34, flexShrink: 0 }}>
+            <div key={`av-${turnId}-${i}`} style={{ position: "relative", width: 34, height: 34, flexShrink: 0, animation: isAttacker ? `${align === "right" ? "lungeLeft" : "lungeRight"} 0.45s ease-out` : hit ? "hitShake 0.4s ease-out" : undefined }}>
               <div style={{
                 width: 34, height: 34, borderRadius: "50%", overflow: "hidden", background: "#0e0e13",
                 border: `2px solid ${isActive ? teamColor : "#33333f"}`,
-                animation: isActive ? "activeGlow 1s ease-in-out infinite" : undefined,
+                animation: superHit ? "superGlowPulse 0.5s ease-in-out 2" : isActive ? "activeGlow 1s ease-in-out infinite" : hit ? "hitFlash 0.4s ease-out" : undefined,
               }}>
                 {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
               </div>
               {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} />}
+              {isKO && <div key={`ko-${turnId}-${i}`} style={{ position: "absolute", inset: -8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, animation: "poofKO 0.7s ease-out forwards", pointerEvents: "none" }}>💨</div>}
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2, flexDirection: align === "right" ? "row-reverse" : "row" }}>
                 <span style={{ fontWeight: isActive ? 800 : 600, color: isActive ? "#fff" : "#c2c1cc" }}>{c.name}</span>
                 <span style={{ color: hpColor, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>{c.curHp}/{c.hp}</span>
               </div>
-              <div style={{ height: 6, background: "#232230", borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: hpColor, boxShadow: `0 0 6px ${hpColor}` }} /></div>
+              <HpBar pct={pct} color={hpColor} />
             </div>
           </div>
         );
@@ -1217,11 +1256,14 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
 
   const myChar = charById(myTeam[myActive]);
   const activeMyHp = myHp[myActive];
+  const bigHit = (st.lastHits || []).some((h) => h.kind === "dmg" && h.amount >= 50);
+  const lowHp = myChar && activeMyHp > 0 && activeMyHp / myChar.hp <= 0.25;
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
+      {lowHp && <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 250, boxShadow: "inset 0 0 90px 20px rgba(239,106,106,0.55)", animation: "vignettePulse 1.1s ease-in-out infinite" }} />}
       <button onClick={onExit} style={{ all: "unset", cursor: "pointer", fontSize: 11.5, color: "#8a8998", marginBottom: 10, display: "block" }}>← Retour aux amis</button>
-      <div style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12 }}>
+      <div key={st.turnCount} style={{ background: "linear-gradient(160deg,#1a2440,#241830)", border: "1px solid #33345a", borderRadius: 16, padding: 12, marginBottom: 12, animation: bigHit ? "shakeArena 0.4s ease-out" : undefined }}>
         <div style={{ display: "flex", gap: 8 }}>
           <FriendTeamPanel team={myTeam} hp={myHp} active={myActive} charById={charById} teamColor="#5B8DEF" title="Toi" hits={st.lastHits} turnId={st.turnCount} sideLetter={isChallenger ? "A" : "B"} />
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}><div style={{ fontSize: 20 }}>⚔️</div></div>
@@ -1258,20 +1300,28 @@ function FriendTeamPanel({ team, hp, active, charById, teamColor, title, align, 
       <div style={{ fontSize: 10, color: teamColor, fontWeight: 800, marginBottom: 8, textAlign: align === "right" ? "right" : "left", textTransform: "uppercase" }}>{title}</div>
       {team.map((id, i) => { const c = charById(id); if (!c) return null; const pct = Math.max(0, Math.round((hp[i] / c.hp) * 100)); const isActive = i === active && hp[i] > 0; const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a";
         const hit = (hits || []).find((h) => h.side === sideLetter && h.index === i);
+        const isKO = hit && hit.kind === "dmg" && hp[i] <= 0;
+        const isAttacker = (hits || []).some((h) => h.kind === "dmg" && h.side !== sideLetter && i === active);
+        const superHit = isAttacker && (hits || []).find((h) => h.kind === "dmg" && h.side !== sideLetter)?.superMove;
         return (
         <div key={i} style={{ opacity: hp[i] <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
-          <div style={{ position: "relative", width: 34, height: 34, flexShrink: 0 }}>
-            <div style={{ width: 34, height: 34, borderRadius: "50%", overflow: "hidden", background: "#0e0e13", border: `2px solid ${isActive ? teamColor : "#33333f"}` }}>
+          <div key={`av-${turnId}-${i}`} style={{ position: "relative", width: 34, height: 34, flexShrink: 0, animation: isAttacker ? `${align === "right" ? "lungeLeft" : "lungeRight"} 0.45s ease-out` : hit ? "hitShake 0.4s ease-out" : undefined }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: "50%", overflow: "hidden", background: "#0e0e13",
+              border: `2px solid ${isActive ? teamColor : "#33333f"}`,
+              animation: superHit ? "superGlowPulse 0.5s ease-in-out 2" : isActive ? "activeGlow 1s ease-in-out infinite" : hit ? "hitFlash 0.4s ease-out" : undefined,
+            }}>
               {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
             </div>
             {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} />}
+            {isKO && <div key={`ko-${turnId}-${i}`} style={{ position: "absolute", inset: -8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, animation: "poofKO 0.7s ease-out forwards", pointerEvents: "none" }}>💨</div>}
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginBottom: 2, flexDirection: align === "right" ? "row-reverse" : "row" }}>
               <span style={{ fontWeight: isActive ? 800 : 600 }}>{c.name}</span>
               <span style={{ color: hpColor, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 }}>{hp[i]}/{c.hp}</span>
             </div>
-            <div style={{ height: 6, background: "#232230", borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: hpColor }} /></div>
+            <HpBar pct={pct} color={hpColor} />
           </div>
         </div>
       ); })}
@@ -1290,8 +1340,8 @@ function resolveFriendTurn(st, game) {
     const dmg = move.dmg || 0;
     defenderHpArr[defenderActive] = Math.max(0, defenderHpArr[defenderActive] - dmg);
     if (moveKey === "super") attackerSuperArr[attackerActive] = true;
-    if (dmg > 0) { hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dmg, kind: "dmg" }); log.push(`${attackerChar.name} ▸ ${move.name} : -${dmg}`); }
-    if (move.heal) { attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal); hits.push({ side, index: side === "A" ? aIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attackerChar.name} soigné +${move.heal}`); }
+    if (dmg > 0) { hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super" }); log.push(`${attackerChar.name} ▸ ${move.name} : -${dmg}`); }
+    if (move.heal) { attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal); hits.push({ side, index: side === "A" ? aIdx : bIdx, amount: move.heal, kind: "heal", superMove: moveKey === "super" }); log.push(`${attackerChar.name} soigné +${move.heal}`); }
   };
   const order = charA.speed >= charB.speed ? ["A", "B"] : ["B", "A"];
   for (const turn of order) {
