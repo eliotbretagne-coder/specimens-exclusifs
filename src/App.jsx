@@ -9,7 +9,7 @@ const RARITIES = {
   mythic:          { label: "Mythique",          color: "#EF4444", dim: "#4a1f1f" },
   ultra_legendary: { label: "Ultra-Légendaire",  color: "#FFD54A", dim: "#4a3f1a", rainbow: true },
 };
-const RARITY_ORDER = ["rare", "super_rare", "epic", "legendary", "mythic", "ultra_legendary"];
+const RARITY_ORDER = ["rare", "super_rare", "epic", "mythic", "legendary", "ultra_legendary"];
 const MAX_HP = 300, MAX_ATK = 150, MAX_SPEED = 10;
 const EMPTY_MOVE = { name: "", dmg: 0, heal: 0, desc: "" };
 
