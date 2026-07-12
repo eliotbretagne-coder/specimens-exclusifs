@@ -37,6 +37,22 @@ function weightedPick(entries) {
   for (const e of entries) { if (r < e.p) return e; r -= e.p; }
   return entries[entries.length - 1];
 }
+const SUPER_ENERGY_NEEDED = 100;
+const ENERGY_GAIN = { attack1: 25, attack2: 30, hitTaken: 15 };
+
+function computeDamage(attackerSpeed, defenderSpeed, baseDmg) {
+  const diff = (attackerSpeed || 0) - (defenderSpeed || 0);
+  let dmg = baseDmg, crit = false, dodge = false;
+  if (diff > 0) {
+    const critChance = Math.min(0.35, diff * 0.03);
+    if (Math.random() < critChance) { dmg = Math.round(dmg * 1.5); crit = true; }
+  } else if (diff < 0) {
+    const dodgeChance = Math.min(0.35, -diff * 0.03);
+    if (Math.random() < dodgeChance) { dmg = Math.round(dmg * 0.5); dodge = true; }
+  }
+  return { dmg, crit, dodge };
+}
+
 function rollBox(box) {
   const pool = [
     ...(box.coin_entries || []).map((e) => ({ kind: "coin", value: e.amount, p: e.probability })),
@@ -614,8 +630,8 @@ function BattleTab({ profile, game, persistProfile }) {
     const botTeam = pickBotTeam();
     const playerChars = team.map((id) => charById(id));
     setFight({
-      player: { chars: playerChars.map((c) => ({ ...c, curHp: c.hp, buff: 0, superUsed: false })), active: 0 },
-      bot: { chars: botTeam.map((c) => ({ ...c, curHp: c.hp, buff: 0, superUsed: false })), active: 0 },
+      player: { chars: playerChars.map((c) => ({ ...c, curHp: c.hp, buff: 0, energy: 0 })), active: 0 },
+      bot: { chars: botTeam.map((c) => ({ ...c, curHp: c.hp, buff: 0, energy: 0 })), active: 0 },
       log: [`Le combat commence : ${playerChars.map((c) => c.name).join(", ")} contre ${botTeam.map((c) => c.name).join(", ")} !`],
       over: false, result: null,
     });
@@ -630,22 +646,32 @@ function BattleTab({ profile, game, persistProfile }) {
       const pc = p.chars[pIdx], bc = b.chars[bIdx];
       const log = []; const hits = []; let itemConsumedId = null;
       if (playerAction.type === "item") { pc.buff += playerAction.item.atk_bonus || 0; log.push(`🎒 ${playerAction.item.name} sur ${pc.name}`); itemConsumedId = playerAction.item.id; }
-      const botMoves = ["attack1", bc.attack2 && (bc.attack2.dmg || bc.attack2.heal) ? "attack2" : null, !bc.superUsed ? "super" : null].filter(Boolean);
-      const botMoveKey = botMoves[Math.floor(Math.random() * botMoves.length)] || "attack1";
+
+      // bot AI: prefers its strongest move, uses super as soon as it's charged
+      let botMoveKey = "attack1";
+      if (bc.attack2 && (bc.attack2.dmg || 0) > (bc.attack1.dmg || 0)) botMoveKey = "attack2";
+      if (bc.super && (bc.energy || 0) >= SUPER_ENERGY_NEEDED) botMoveKey = "super";
       const playerMoveKey = playerAction.type === "move" ? playerAction.moveKey : "attack1";
-      const applyMove = (side, attacker, defender, moveKey, isSuper) => {
+
+      const applyMove = (side, attacker, defender, moveKey) => {
         const move = attacker[moveKey]; if (!move) return;
-        const dmg = Math.round((move.dmg || 0) * (1 + (attacker.buff || 0) / 100));
+        const base = Math.round((move.dmg || 0) * (1 + (attacker.buff || 0) / 100));
+        const { dmg, crit, dodge } = computeDamage(attacker.speed, defender.speed, base);
         defender.curHp = Math.max(0, defender.curHp - dmg);
-        if (dmg > 0) { hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dmg, kind: "dmg", superMove: isSuper }); log.push(`${attacker.name} ▸ ${move.name} : -${dmg}`); }
-        if (move.heal) { attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal); hits.push({ side, index: side === "p" ? pIdx : bIdx, amount: move.heal, kind: "heal", superMove: isSuper }); log.push(`${attacker.name} soigné +${move.heal}`); }
-        if (isSuper) attacker.superUsed = true;
+        if (dmg > 0) {
+          hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super", crit, dodge });
+          log.push(`${attacker.name} ▸ ${move.name} : -${dmg}${crit ? " 🎯 critique !" : dodge ? " (esquive partielle)" : ""}`);
+          defender.energy = Math.min(SUPER_ENERGY_NEEDED, (defender.energy || 0) + ENERGY_GAIN.hitTaken);
+        }
+        if (move.heal) { attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal); hits.push({ side, index: side === "p" ? pIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attacker.name} soigné +${move.heal}`); }
+        if (moveKey === "super") attacker.energy = 0;
+        else attacker.energy = Math.min(SUPER_ENERGY_NEEDED, (attacker.energy || 0) + (ENERGY_GAIN[moveKey] || 0));
       };
       const order = pc.speed >= bc.speed ? ["p", "bot"] : ["bot", "p"];
       for (const turn of order) {
         if (state.player.chars.every((c) => c.curHp <= 0) || state.bot.chars.every((c) => c.curHp <= 0)) break;
-        if (turn === "p") applyMove("p", pc, bc, playerMoveKey, playerMoveKey === "super");
-        else applyMove("bot", bc, pc, botMoveKey, botMoveKey === "super");
+        if (turn === "p") applyMove("p", pc, bc, playerMoveKey);
+        else applyMove("bot", bc, pc, botMoveKey);
       }
       const advance = (side) => { while (side.active < side.chars.length && side.chars[side.active].curHp <= 0) { log.push(`${side.chars[side.active].name} K.O.`); side.active += 1; } };
       advance(p); advance(b);
@@ -689,12 +715,20 @@ function BattleTab({ profile, game, persistProfile }) {
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, background: "#1a1922", borderRadius: 10, padding: "8px 10px" }}>
               {pc.image_url ? <img src={pc.image_url} alt="" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", border: "2px solid #5B8DEF" }} /> : <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#5B8DEF33", display: "flex", alignItems: "center", justifyContent: "center" }}>🃏</div>}
-              <div style={{ fontSize: 12.5, fontWeight: 800 }}>Choisis l'action de {pc.name}</div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 800 }}>Choisis l'action de {pc.name}</div>
+                {pc.super && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+                    <div style={{ flex: 1, height: 5, background: "#2a2933", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, pc.energy || 0)}%`, background: (pc.energy || 0) >= SUPER_ENERGY_NEEDED ? "#FFD54A" : "#5B8DEF", boxShadow: (pc.energy || 0) >= SUPER_ENERGY_NEEDED ? "0 0 6px #FFD54A" : "none" }} /></div>
+                    <span style={{ fontSize: 9.5, color: "#8a8998", fontFamily: "'JetBrains Mono', monospace" }}>⚡{Math.min(100, pc.energy || 0)}/100</span>
+                  </div>
+                )}
+              </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <ActionBtn label={pc.attack1?.name} sub={`-${pc.attack1?.dmg || 0} dégâts`} icon="🥊" kind="attack1" onClick={() => doTurn({ type: "move", moveKey: "attack1" })} />
               {pc.attack2 && (pc.attack2.dmg > 0 || pc.attack2.heal > 0) && <ActionBtn label={pc.attack2.name} sub={pc.attack2.dmg ? `-${pc.attack2.dmg} dégâts` : `+${pc.attack2.heal} PV`} icon="💥" kind="attack2" onClick={() => doTurn({ type: "move", moveKey: "attack2" })} />}
-              {pc.super && <ActionBtn label={pc.super.name} sub={`SUPER · -${pc.super.dmg}`} icon="🌟" kind="super" disabled={pc.superUsed} onClick={() => doTurn({ type: "move", moveKey: "super" })} />}
+              {pc.super && <ActionBtn label={pc.super.name} sub={(pc.energy || 0) >= SUPER_ENERGY_NEEDED ? `SUPER · -${pc.super.dmg}` : `Charge : ${Math.min(100, pc.energy || 0)}/100`} icon="🌟" kind="super" disabled={(pc.energy || 0) < SUPER_ENERGY_NEEDED} onClick={() => doTurn({ type: "move", moveKey: "super" })} />}
             </div>
             {myItems.length > 0 && (<>
               <div style={{ fontSize: 11, color: "#A855F7", fontWeight: 800, margin: "12px 0 6px", textTransform: "uppercase" }}>🎒 Objets actifs</div>
@@ -782,13 +816,13 @@ function HpBar({ pct, color }) {
   );
 }
 
-function FloatingHit({ amount, kind, hitKey }) {
+function FloatingHit({ amount, kind, hitKey, crit, dodge }) {
   return (
     <div key={hitKey} style={{
-      position: "absolute", right: -2, top: -4, fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, fontSize: 16,
-      color: kind === "heal" ? "#7cd992" : "#ff5252", textShadow: "0 2px 6px rgba(0,0,0,0.7), 0 0 10px rgba(0,0,0,0.5)",
+      position: "absolute", right: -2, top: -4, fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, fontSize: crit ? 19 : 16,
+      color: kind === "heal" ? "#7cd992" : crit ? "#ff9d3d" : dodge ? "#b9b8c4" : "#ff5252", textShadow: "0 2px 6px rgba(0,0,0,0.7), 0 0 10px rgba(0,0,0,0.5)",
       animation: "floatHit 1.1s ease-out forwards", pointerEvents: "none", zIndex: 6,
-    }}>{kind === "heal" ? "+" : "-"}{amount}</div>
+    }}>{kind === "heal" ? "+" : "-"}{amount}{crit ? "!" : ""}</div>
   );
 }
 
@@ -814,7 +848,7 @@ function BattleSidePanel({ title, chars, active, align, teamColor, hits, turnId,
               }}>
                 {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
               </div>
-              {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} />}
+              {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} crit={hit.crit} dodge={hit.dodge} />}
               {isKO && <div key={`ko-${turnId}-${i}`} style={{ position: "absolute", inset: -8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, animation: "poofKO 0.7s ease-out forwards", pointerEvents: "none" }}>💨</div>}
             </div>
             <div style={{ flex: 1 }}>
@@ -919,7 +953,7 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
     const hp = teamIds.map((id) => game.characters.find((c) => c.id === id)?.hp || 100);
     const { error } = await supabase.from("battle_challenges").insert({
       challenger_id: profile.id, opponent_id: friend.id, status: "pending",
-      state: { teamA: teamIds, hpA: hp, superA: teamIds.map(() => false), activeA: 0, log: [] },
+      state: { teamA: teamIds, hpA: hp, energyA: teamIds.map(() => 0), activeA: 0, log: [] },
     });
     setPickingFor(null);
     if (error) showToast("Erreur : " + error.message); else { showToast(`Défi envoyé à ${friend.username} !`); loadChallenges(); }
@@ -930,7 +964,7 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
     const st = challenge.state;
     const { error } = await supabase.from("battle_challenges").update({
       status: "fighting",
-      state: { ...st, teamB: teamIds, hpB: hp, superB: teamIds.map(() => false), activeB: 0, choiceA: null, choiceB: null, log: [...(st.log || []), "Le combat commence !"], finished: false },
+      state: { ...st, teamB: teamIds, hpB: hp, energyB: teamIds.map(() => 0), activeB: 0, choiceA: null, choiceB: null, log: [...(st.log || []), "Le combat commence !"], finished: false },
     }).eq("id", challenge.id);
     setPickingFor(null);
     if (error) showToast("Erreur : " + error.message); else { setActiveChallengeId(challenge.id); loadChallenges(); }
@@ -1224,7 +1258,7 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
   const oppHp = isChallenger ? st.hpB : st.hpA;
   const myActive = isChallenger ? st.activeA : st.activeB;
   const oppActive = isChallenger ? st.activeB : st.activeA;
-  const mySuper = isChallenger ? st.superA : st.superB;
+  const myEnergy = isChallenger ? st.energyA : st.energyB;
   const myChoice = isChallenger ? st.choiceA : st.choiceB;
   const finished = st.finished;
 
@@ -1284,11 +1318,19 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
       ) : myChoice ? (
         <div style={{ textAlign: "center", padding: "14px 0", color: "#8a8998", fontSize: 13 }}>⏳ En attente de l'action de l'adversaire…</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <ActionBtn label={myChar.attack1?.name} sub={`-${myChar.attack1?.dmg || 0}`} icon="🥊" kind="attack1" onClick={() => chooseAction("attack1")} />
-          {myChar.attack2 && (myChar.attack2.dmg > 0 || myChar.attack2.heal > 0) && <ActionBtn label={myChar.attack2.name} sub={myChar.attack2.dmg ? `-${myChar.attack2.dmg}` : `+${myChar.attack2.heal} PV`} icon="💥" kind="attack2" onClick={() => chooseAction("attack2")} />}
-          {myChar.super && <ActionBtn label={myChar.super.name} sub={`SUPER · -${myChar.super.dmg}`} icon="🌟" kind="super" disabled={mySuper[myActive]} onClick={() => chooseAction("super")} />}
-        </div>
+        <>
+          {myChar.super && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+              <div style={{ flex: 1, height: 5, background: "#2a2933", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, myEnergy[myActive] || 0)}%`, background: (myEnergy[myActive] || 0) >= SUPER_ENERGY_NEEDED ? "#FFD54A" : "#5B8DEF", boxShadow: (myEnergy[myActive] || 0) >= SUPER_ENERGY_NEEDED ? "0 0 6px #FFD54A" : "none" }} /></div>
+              <span style={{ fontSize: 9.5, color: "#8a8998", fontFamily: "'JetBrains Mono', monospace" }}>⚡{Math.min(100, myEnergy[myActive] || 0)}/100</span>
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <ActionBtn label={myChar.attack1?.name} sub={`-${myChar.attack1?.dmg || 0}`} icon="🥊" kind="attack1" onClick={() => chooseAction("attack1")} />
+            {myChar.attack2 && (myChar.attack2.dmg > 0 || myChar.attack2.heal > 0) && <ActionBtn label={myChar.attack2.name} sub={myChar.attack2.dmg ? `-${myChar.attack2.dmg}` : `+${myChar.attack2.heal} PV`} icon="💥" kind="attack2" onClick={() => chooseAction("attack2")} />}
+            {myChar.super && <ActionBtn label={myChar.super.name} sub={(myEnergy[myActive] || 0) >= SUPER_ENERGY_NEEDED ? `SUPER · -${myChar.super.dmg}` : `Charge : ${Math.min(100, myEnergy[myActive] || 0)}/100`} icon="🌟" kind="super" disabled={(myEnergy[myActive] || 0) < SUPER_ENERGY_NEEDED} onClick={() => chooseAction("super")} />}
+          </div>
+        </>
       )}
     </div>
   );
@@ -1313,7 +1355,7 @@ function FriendTeamPanel({ team, hp, active, charById, teamColor, title, align, 
             }}>
               {c.image_url ? <img src={c.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🃏</div>}
             </div>
-            {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} />}
+            {hit && <FloatingHit key={`${turnId}-${i}`} hitKey={`${turnId}-${i}`} amount={hit.amount} kind={hit.kind} crit={hit.crit} dodge={hit.dodge} />}
             {isKO && <div key={`ko-${turnId}-${i}`} style={{ position: "absolute", inset: -8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, animation: "poofKO 0.7s ease-out forwards", pointerEvents: "none" }}>💨</div>}
           </div>
           <div style={{ flex: 1 }}>
@@ -1335,19 +1377,25 @@ function resolveFriendTurn(st, game) {
   const aIdx = s.activeA, bIdx = s.activeB;
   const charA = charById(s.teamA[aIdx]), charB = charById(s.teamB[bIdx]);
   const log = []; const hits = [];
-  const applyMove = (side, attackerChar, attackerHpArr, attackerActive, attackerSuperArr, moveKey, defenderChar, defenderHpArr, defenderActive) => {
+  const applyMove = (side, attackerChar, attackerHpArr, attackerActive, attackerEnergyArr, moveKey, defenderChar, defenderHpArr, defenderActive, defenderEnergyArr) => {
     const move = attackerChar[moveKey]; if (!move) return;
-    const dmg = move.dmg || 0;
+    const base = move.dmg || 0;
+    const { dmg, crit, dodge } = computeDamage(attackerChar.speed, defenderChar.speed, base);
     defenderHpArr[defenderActive] = Math.max(0, defenderHpArr[defenderActive] - dmg);
-    if (moveKey === "super") attackerSuperArr[attackerActive] = true;
-    if (dmg > 0) { hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super" }); log.push(`${attackerChar.name} ▸ ${move.name} : -${dmg}`); }
-    if (move.heal) { attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal); hits.push({ side, index: side === "A" ? aIdx : bIdx, amount: move.heal, kind: "heal", superMove: moveKey === "super" }); log.push(`${attackerChar.name} soigné +${move.heal}`); }
+    if (dmg > 0) {
+      hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super", crit, dodge });
+      log.push(`${attackerChar.name} ▸ ${move.name} : -${dmg}${crit ? " 🎯 critique !" : dodge ? " (esquive partielle)" : ""}`);
+      defenderEnergyArr[defenderActive] = Math.min(SUPER_ENERGY_NEEDED, (defenderEnergyArr[defenderActive] || 0) + ENERGY_GAIN.hitTaken);
+    }
+    if (move.heal) { attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal); hits.push({ side, index: side === "A" ? aIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attackerChar.name} soigné +${move.heal}`); }
+    if (moveKey === "super") attackerEnergyArr[attackerActive] = 0;
+    else attackerEnergyArr[attackerActive] = Math.min(SUPER_ENERGY_NEEDED, (attackerEnergyArr[attackerActive] || 0) + (ENERGY_GAIN[moveKey] || 0));
   };
   const order = charA.speed >= charB.speed ? ["A", "B"] : ["B", "A"];
   for (const turn of order) {
     if (s.hpA.every((h) => h <= 0) || s.hpB.every((h) => h <= 0)) break;
-    if (turn === "A") applyMove("A", charA, s.hpA, s.activeA, s.superA, s.choiceA, charB, s.hpB, s.activeB);
-    else applyMove("B", charB, s.hpB, s.activeB, s.superB, s.choiceB, charA, s.hpA, s.activeA);
+    if (turn === "A") applyMove("A", charA, s.hpA, s.activeA, s.energyA, s.choiceA, charB, s.hpB, s.activeB, s.energyB);
+    else applyMove("B", charB, s.hpB, s.activeB, s.energyB, s.choiceB, charA, s.hpA, s.activeA, s.energyA);
   }
   while (s.activeA < s.teamA.length && s.hpA[s.activeA] <= 0) { log.push(`${charById(s.teamA[s.activeA]).name} K.O.`); s.activeA += 1; }
   while (s.activeB < s.teamB.length && s.hpB[s.activeB] <= 0) { log.push(`${charById(s.teamB[s.activeB]).name} K.O.`); s.activeB += 1; }
