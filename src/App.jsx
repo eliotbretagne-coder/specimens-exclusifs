@@ -2,12 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { supabase, ADMIN_EMAIL } from "./supabaseClient.js";
 
 const RARITIES = {
-  rare:            { label: "Rare",             color: "#5B8DEF", dim: "#2b3a5c" },
-  super_rare:      { label: "Super Rare",        color: "#2DD4BF", dim: "#1c3f3c" },
+  rare:            { label: "Rare",             color: "#4ADE80", dim: "#1c3d24" },
+  super_rare:      { label: "Super Rare",        color: "#5B8DEF", dim: "#1c2c4a" },
   epic:            { label: "Épique",            color: "#A855F7", dim: "#382a4d" },
   legendary:       { label: "Légendaire",        color: "#F0A93A", dim: "#4a3820" },
-  mythic:          { label: "Mythique",          color: "#EC4899", dim: "#4a2338" },
-  ultra_legendary: { label: "Ultra-Légendaire",  color: "#FFD54A", dim: "#4a3f1a" },
+  mythic:          { label: "Mythique",          color: "#EF4444", dim: "#4a1f1f" },
+  ultra_legendary: { label: "Ultra-Légendaire",  color: "#FFD54A", dim: "#4a3f1a", rainbow: true },
 };
 const RARITY_ORDER = ["rare", "super_rare", "epic", "legendary", "mythic", "ultra_legendary"];
 const MAX_HP = 300, MAX_ATK = 150, MAX_SPEED = 10;
@@ -73,6 +73,17 @@ function rollBox(box) {
 
 function RarityTag({ rarity }) {
   const r = RARITIES[rarity] || RARITIES.rare;
+  if (r.rainbow) {
+    return (
+      <span style={{
+        fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 800,
+        letterSpacing: 0.5, textTransform: "uppercase",
+        background: "linear-gradient(90deg,#FFD54A,#EC4899,#A855F7,#5B8DEF,#4ADE80,#FFD54A)",
+        WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text",
+        border: "1px solid #FFD54A55", borderRadius: 5, padding: "3px 7px", display: "inline-block",
+      }}>{r.label}</span>
+    );
+  }
   return (
     <span style={{
       fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700,
@@ -108,7 +119,7 @@ function CharCard({ character, locked, onClick, small }) {
       borderRadius: 14, overflow: "hidden", boxSizing: "border-box",
       background: locked ? "#1a1a22" : "#1d1c26",
       border: foil ? "2px solid transparent" : `1.5px solid ${locked ? "#33333f" : r.color + "88"}`,
-      backgroundImage: foil && !locked ? "linear-gradient(#1d1c26,#1d1c26), conic-gradient(from 0deg, #FFD54A, #EC4899, #A855F7, #2DD4BF, #5B8DEF, #FFD54A)" : undefined,
+      backgroundImage: foil && !locked ? "linear-gradient(#1d1c26,#1d1c26), conic-gradient(from 0deg, #FFD54A, #EC4899, #A855F7, #5B8DEF, #4ADE80, #FFD54A)" : undefined,
       backgroundOrigin: "border-box", backgroundClip: foil && !locked ? "padding-box, border-box" : undefined,
       boxShadow: locked ? "none" : `0 0 16px ${r.color}33`,
     }}>
@@ -378,6 +389,34 @@ function SpecimensTab({ profile, game, onOpen }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
         {sorted.map((c) => <CharCard key={c.id} character={c} locked={!profile.unlocked_character_ids?.includes(c.id)} onClick={() => onOpen(c)} />)}
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 26, marginBottom: 12 }}>
+        <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 16 }}>Objets</div>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#9a99a8" }}>{(profile.unlocked_item_ids || []).length}/{game.items.length}</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+        {game.items.map((it) => {
+          const owned = (profile.unlocked_item_ids || []).includes(it.id);
+          const stock = profile.item_stacks?.[it.id] || 0;
+          const limit = it.stack_limit ?? 5;
+          const r = RARITIES[it.rarity] || RARITIES.rare;
+          return (
+            <div key={it.id} style={{
+              borderRadius: 14, overflow: "hidden", background: owned ? "#1d1c26" : "#1a1a22",
+              border: `1.5px solid ${owned ? r.color + "88" : "#33333f"}`, boxShadow: owned ? `0 0 12px ${r.color}22` : "none",
+            }}>
+              <div style={{ aspectRatio: "1", background: "#111117", position: "relative" }}>
+                {it.image_url && owned ? <img src={it.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26 }}>{owned ? "🎒" : "🔒"}</div>}
+                {owned && <div style={{ position: "absolute", bottom: 4, right: 4, background: "#0e0e13cc", borderRadius: 6, padding: "2px 6px", fontSize: 9.5, fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, color: stock >= limit ? "#ef6a6a" : "#f4f2ec" }}>{stock}/{limit}</div>}
+              </div>
+              <div style={{ padding: "6px 7px 8px" }}>
+                <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 10, color: owned ? "#f4f2ec" : "#55555f", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owned ? it.name : "???"}</div>
+                <div style={{ marginTop: 4 }}><RarityTag rarity={it.rarity} /></div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
