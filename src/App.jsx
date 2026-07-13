@@ -1299,6 +1299,15 @@ function TradeModal({ friend, game, profile, onCancel, onConfirm }) {
   const myItems = Object.entries(profile.item_stacks || {}).filter(([, n]) => n > 0).map(([id]) => game.items.find((i) => i.id === id)).filter(Boolean);
   const [offer, setOffer] = useState({ char: null, item: null, coins: 0 });
   const [request, setRequest] = useState({ char: null, item: null, coins: 0 });
+  const [friendInventory, setFriendInventory] = useState(null); // null = loading
+
+  useEffect(() => {
+    supabase.from("profiles").select("unlocked_character_ids,item_stacks").eq("id", friend.id).single()
+      .then(({ data }) => setFriendInventory(data || { unlocked_character_ids: [], item_stacks: {} }));
+  }, [friend.id]);
+
+  const friendChars = friendInventory ? [...new Set(friendInventory.unlocked_character_ids || [])].map((id) => game.characters.find((c) => c.id === id)).filter(Boolean) : [];
+  const friendItems = friendInventory ? Object.entries(friendInventory.item_stacks || {}).filter(([, n]) => n > 0).map(([id]) => game.items.find((i) => i.id === id)).filter(Boolean) : [];
 
   const canSubmit = (offer.char || offer.item || offer.coins > 0) && (request.char || request.item || request.coins > 0);
 
@@ -1308,7 +1317,16 @@ function TradeModal({ friend, game, profile, onCancel, onConfirm }) {
         <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 16, marginBottom: 4 }}>Échanger avec {friend.username}</div>
         <div style={{ fontSize: 11.5, color: "#8a8998", marginBottom: 14 }}>Choisis ce que tu donnes et ce que tu demandes en retour.</div>
         <TradeSidePicker label="🎁 Tu donnes" part={offer} setPart={setOffer} charOptions={myChars} itemOptions={myItems} maxCoins={profile.coins || 0} />
-        <TradeSidePicker label="🙏 Tu demandes" part={request} setPart={setRequest} charOptions={game.characters} itemOptions={game.items} />
+        {friendInventory === null ? (
+          <div style={{ fontSize: 12, color: "#5c5b68", marginBottom: 10 }}>Chargement de l'inventaire de {friend.username}…</div>
+        ) : (
+          <>
+            <TradeSidePicker label="🙏 Tu demandes" part={request} setPart={setRequest} charOptions={friendChars} itemOptions={friendItems} />
+            {friendChars.length === 0 && friendItems.length === 0 && (
+              <div style={{ fontSize: 11.5, color: "#F0A93A", marginTop: -6, marginBottom: 10 }}>{friend.username} n'a encore aucun personnage ni objet à échanger — tu peux seulement demander des pièces.</div>
+            )}
+          </>
+        )}
         <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
           <button onClick={onCancel} style={{ all: "unset", cursor: "pointer", flex: 1, textAlign: "center", padding: "12px 0", borderRadius: 10, background: "#232230", color: "#c2c1cc", fontWeight: 700, fontSize: 13 }}>Annuler</button>
           <button disabled={!canSubmit} onClick={() => onConfirm(offer, request)} style={{ all: "unset", cursor: canSubmit ? "pointer" : "not-allowed", flex: 2, textAlign: "center", padding: "12px 0", borderRadius: 10, background: canSubmit ? "linear-gradient(90deg,#A855F7,#EC4899)" : "#232230", color: canSubmit ? "#fff" : "#5c5b68", fontWeight: 800, fontSize: 13 }}>Proposer l'échange</button>
