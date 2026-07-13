@@ -228,6 +228,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [hasFriendNotif, setHasFriendNotif] = useState(false);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -272,6 +273,43 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.boxes_opened, profile?.unlocked_character_ids?.length, profile?.battles_won, profile?.coins, profile?.trades_completed, game]);
 
+  const notifyBrowser = useCallback((title, body) => {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "granted") new Notification(title, { body, icon: "🃏" });
+  }, []);
+
+  const refreshFriendNotifs = useCallback(async () => {
+    if (!profile) return;
+    const [fr, ch, tr] = await Promise.all([
+      supabase.from("friendships").select("id", { count: "exact", head: true }).eq("addressee_id", profile.id).eq("status", "pending"),
+      supabase.from("battle_challenges").select("id", { count: "exact", head: true }).eq("opponent_id", profile.id).eq("status", "pending"),
+      supabase.from("trades").select("id", { count: "exact", head: true }).eq("recipient_id", profile.id).eq("status", "pending"),
+    ]);
+    const total = (fr.count || 0) + (ch.count || 0) + (tr.count || 0);
+    setHasFriendNotif(total > 0);
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!profile) return;
+    refreshFriendNotifs();
+    if (typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission();
+
+    const chFr = supabase.channel(`notif-fr-${profile.id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "friendships", filter: `addressee_id=eq.${profile.id}` }, () => { notifyBrowser("Nouvelle demande d'ami", "Quelqu'un veut t'ajouter."); refreshFriendNotifs(); })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "friendships" }, refreshFriendNotifs)
+      .subscribe();
+    const chCh = supabase.channel(`notif-ch-${profile.id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "battle_challenges", filter: `opponent_id=eq.${profile.id}` }, () => { notifyBrowser("Défi reçu !", "Un ami veut se battre contre toi."); refreshFriendNotifs(); })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "battle_challenges" }, refreshFriendNotifs)
+      .subscribe();
+    const chTr = supabase.channel(`notif-tr-${profile.id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "trades", filter: `recipient_id=eq.${profile.id}` }, () => { notifyBrowser("Proposition d'échange", "Un ami te propose un échange."); refreshFriendNotifs(); })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "trades" }, refreshFriendNotifs)
+      .subscribe();
+
+    return () => { supabase.removeChannel(chFr); supabase.removeChannel(chCh); supabase.removeChannel(chTr); };
+  }, [profile?.id, refreshFriendNotifs, notifyBrowser]);
+
   const persistProfile = useCallback(async (patch) => {
     if (!profile) return;
     const next = { ...profile, ...patch };
@@ -310,7 +348,7 @@ export default function App() {
         {tab === "profile" && <ProfileTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
       </div>
-      <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} />
+      <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} hasFriendNotif={hasFriendNotif} />
       {detailChar && <CharModal character={detailChar} owned={profile.unlocked_character_ids?.includes(detailChar.id)} onClose={() => setDetailChar(null)} />}
       {toast && <Toast text={toast} />}
     </div>
@@ -347,12 +385,12 @@ function TopBar({ profile, onLogout, menuOpen, setMenuOpen }) {
   );
 }
 
-function BottomNav({ tab, setTab, isAdmin }) {
+function BottomNav({ tab, setTab, isAdmin, hasFriendNotif }) {
   const items = [
     { id: "specimens", icon: "🃏", label: "Spécimens" },
     { id: "shop", icon: "🎁", label: "Boutique" },
     { id: "battle", icon: "⚔️", label: "Combat" },
-    { id: "friends", icon: "👥", label: "Amis" },
+    { id: "friends", icon: "👥", label: "Amis", notif: hasFriendNotif },
     { id: "news", icon: "📰", label: "Actus" },
     { id: "profile", icon: "👤", label: "Profil" },
     ...(isAdmin ? [{ id: "admin", icon: "🛠️", label: "Admin" }] : []),
@@ -361,7 +399,10 @@ function BottomNav({ tab, setTab, isAdmin }) {
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100, background: "#141319ee", backdropFilter: "blur(10px)", borderTop: "1px solid #201f28", display: "flex", justifyContent: "space-around", padding: "8px 2px calc(8px + env(safe-area-inset-bottom))", overflowX: "auto" }}>
       {items.map((it) => (
         <button key={it.id} onClick={() => setTab(it.id)} style={{ all: "unset", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 7px", borderRadius: 10, minWidth: 44, background: tab === it.id ? "#22212c" : "transparent" }}>
-          <span style={{ fontSize: 16, opacity: tab === it.id ? 1 : 0.55 }}>{it.icon}</span>
+          <span style={{ position: "relative", fontSize: 16, opacity: tab === it.id ? 1 : 0.55 }}>
+            {it.icon}
+            {it.notif && <span style={{ position: "absolute", top: -2, right: -4, width: 8, height: 8, borderRadius: "50%", background: "#ef4444", border: "1.5px solid #141319" }} />}
+          </span>
           <span style={{ fontSize: 8.5, fontWeight: 700, color: tab === it.id ? "#F0A93A" : "#6f6e7c", letterSpacing: 0.2 }}>{it.label}</span>
         </button>
       ))}
