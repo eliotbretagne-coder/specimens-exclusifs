@@ -53,17 +53,23 @@ function computeDamage(attackerSpeed, defenderSpeed, baseDmg) {
   return { dmg, crit, dodge };
 }
 
-function rollBox(box) {
+function rollBox(box, ownedCharacterIds = []) {
   const pool = [
     ...(box.coin_entries || []).map((e) => ({ kind: "coin", value: e.amount, p: e.probability })),
     ...(box.character_entries || []).map((e) => ({ kind: "char", id: e.character_id, p: e.probability })),
     ...(box.item_entries || []).map((e) => ({ kind: "item", id: e.item_id, p: e.probability })),
   ];
+  const owned = new Set(ownedCharacterIds);
+  const bestCoin = (box.coin_entries || []).reduce((best, e) => (!best || e.probability > best.probability) ? e : best, null);
   const results = [];
   const usedNonCoin = new Set();
   for (let i = 0; i < (box.rewards_count || 1); i++) {
     const available = pool.filter((e) => e.kind === "coin" || !usedNonCoin.has(e.kind + ":" + e.id));
-    const r = weightedPick(available.length ? available : pool);
+    let r = weightedPick(available.length ? available : pool);
+    // never hand out a character the player already owns — swap it for the box's best coin reward instead
+    if (r && r.kind === "char" && owned.has(r.id)) {
+      r = bestCoin ? { kind: "coin", value: bestCoin.amount, p: bestCoin.probability } : { kind: "coin", value: 20, p: 1 };
+    }
     if (r) { results.push(r); if (r.kind !== "coin") usedNonCoin.add(r.kind + ":" + r.id); }
   }
   return results;
@@ -463,18 +469,31 @@ function SpecimensTab({ profile, game, onOpen }) {
   );
 }
 
-function MoveRow({ label, move }) {
+function StatCard({ icon, value, max, label, color }) {
+  const pct = Math.min(100, Math.round((value / max) * 100));
+  return (
+    <div style={{ flex: 1, background: "#1a1922", borderRadius: 12, padding: "10px 8px", textAlign: "center" }}>
+      <div style={{ fontSize: 16, marginBottom: 2 }}>{icon}</div>
+      <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: 16 }}>{value}<span style={{ color: "#5c5b68", fontSize: 12 }}>/{max}</span></div>
+      <div style={{ fontSize: 9.5, color: "#77768a", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
+      <div style={{ height: 5, background: "#232230", borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${pct}%`, background: color, boxShadow: `0 0 6px ${color}` }} /></div>
+    </div>
+  );
+}
+
+function MoveRow({ label, move, ulti, rarityColor }) {
   if (!move || (!move.dmg && !move.heal) || !move.name || move.name === "—") return null;
   return (
-    <div style={{ background: "#17161f", borderRadius: 12, padding: "11px 13px", marginBottom: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-        <div style={{ fontSize: 10, color: "#77768a", fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase" }}>{label}</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {move.dmg > 0 && <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#ef6a6a", fontWeight: 700 }}>-{move.dmg}</span>}
-          {move.heal > 0 && <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#7cd992", fontWeight: 700 }}>+{move.heal}</span>}
-        </div>
+    <div style={{
+      background: ulti ? "#241a12" : "#17161f", borderRadius: 12, padding: "12px 14px", marginBottom: 8,
+      border: ulti ? `1.5px solid ${rarityColor}66` : "1px solid transparent",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+        <span style={{ fontSize: 13 }}>{ulti ? "🌟" : "⚔️"}</span>
+        <div style={{ fontWeight: 800, fontSize: 13.5, color: ulti ? rarityColor : "#f4f2ec", flex: 1 }}>{ulti ? "ULTI — " : ""}{move.name}</div>
+        {move.dmg > 0 && <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#ef6a6a", fontWeight: 800 }}>💥 {move.dmg}</span>}
+        {move.heal > 0 && <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#7cd992", fontWeight: 800 }}>💚 +{move.heal}</span>}
       </div>
-      <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 3 }}>{move.name}</div>
       {move.desc && <div style={{ fontSize: 12, color: "#a3a2af", lineHeight: 1.45 }}>{move.desc}</div>}
     </div>
   );
@@ -483,35 +502,33 @@ function MoveRow({ label, move }) {
 function CharModal({ character, owned, onClose }) {
   const r = RARITIES[character.rarity];
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.78)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, maxHeight: "88vh", overflowY: "auto", background: "#141319", borderRadius: "20px 20px 0 0", padding: "18px 18px 30px", border: `1px solid ${r.color}44`, borderBottom: "none" }}>
-        <div style={{ width: 40, height: 4, background: "#2f2e39", borderRadius: 4, margin: "0 auto 14px" }} />
-        <div style={{ display: "flex", gap: 14 }}>
-          <div style={{ width: 100, height: 128, borderRadius: 12, overflow: "hidden", flexShrink: 0, background: "#0e0e13", border: `1.5px solid ${r.color}66` }}>
-            {character.image_url && owned ? <img src={character.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32 }}>{owned ? "🃏" : "🔒"}</div>}
-          </div>
-          <div style={{ flex: 1 }}>
-            <RarityTag rarity={character.rarity} />
-            <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 19, margin: "7px 0 4px" }}>{owned ? character.name : "???"}</div>
-            <div style={{ fontSize: 12, color: "#8a8998" }}>📍 {character.habitat}</div>
-          </div>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.82)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto", background: "#141319", borderRadius: "22px 22px 0 0", border: `2px solid ${r.color}`, borderBottom: "none", boxShadow: `0 -10px 40px ${r.color}33` }}>
+        <div style={{ position: "relative", width: "100%", aspectRatio: "16/11", background: "#0e0e13" }}>
+          {character.image_url && owned ? <img src={character.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 54 }}>{owned ? "🃏" : "🔒"}</div>}
+          <div style={{ position: "absolute", top: 12, left: 12 }}><RarityTag rarity={character.rarity} /></div>
+          <button onClick={onClose} style={{ all: "unset", cursor: "pointer", position: "absolute", top: 10, right: 10, width: 30, height: 30, borderRadius: "50%", background: "rgba(10,10,14,0.6)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>✕</button>
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 60%, #141319 100%)" }} />
         </div>
-        {owned ? (
-          <>
-            {character.description && <div style={{ fontSize: 13, color: "#c2c1cc", lineHeight: 1.55, marginTop: 14, fontStyle: "italic" }}>{character.description}</div>}
-            <div style={{ display: "flex", gap: 12, background: "#17161f", borderRadius: 12, padding: "14px 14px", margin: "14px 0" }}>
-              <StatBar icon="♡ Vie" value={character.hp} max={MAX_HP} color="#7cd992" />
-              <StatBar icon="⚡ Attaque" value={Math.max(character.attack1?.dmg || 0, character.attack2?.dmg || 0)} max={MAX_ATK} color="#ef6a6a" />
-              <StatBar icon="👟 Vitesse" value={character.speed} max={MAX_SPEED} color="#5B8DEF" />
-            </div>
-            <MoveRow label="Attaque 1" move={character.attack1} />
-            <MoveRow label="Attaque 2" move={character.attack2} />
-            <MoveRow label="Super" move={character.super} />
-          </>
-        ) : (
-          <div style={{ marginTop: 18, padding: 16, background: "#17161f", borderRadius: 12, fontSize: 13, color: "#8a8998", textAlign: "center" }}>Spécimen non débloqué. Ouvre des boîtes dans la boutique pour tenter ta chance.</div>
-        )}
-        <button onClick={onClose} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", marginTop: 18, padding: "12px 0", borderRadius: 12, background: "#1e1d27", color: "#c2c1cc", fontWeight: 700, fontSize: 13 }}>Fermer</button>
+        <div style={{ padding: "0 18px 26px", marginTop: -8 }}>
+          <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 21, marginBottom: 2 }}>{owned ? character.name : "???"}</div>
+          <div style={{ fontSize: 12, color: "#8a8998", marginBottom: 14 }}>📍 {character.habitat}</div>
+          {owned ? (
+            <>
+              {character.description && <div style={{ fontSize: 13, color: "#c2c1cc", lineHeight: 1.55, marginBottom: 14 }}>{character.description}</div>}
+              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                <StatCard icon="♡" value={character.hp} max={MAX_HP} label="Vie" color="#7cd992" />
+                <StatCard icon="⚡" value={Math.max(character.attack1?.dmg || 0, character.attack2?.dmg || 0)} max={MAX_ATK} label="Attaque" color="#ef6a6a" />
+                <StatCard icon="👟" value={character.speed} max={MAX_SPEED} label="Vitesse" color="#5B8DEF" />
+              </div>
+              <MoveRow label="Attaque 1" move={character.attack1} />
+              <MoveRow label="Attaque 2" move={character.attack2} />
+              <MoveRow label="Super" move={character.super} ulti rarityColor={r.color} />
+            </>
+          ) : (
+            <div style={{ marginTop: 4, padding: 16, background: "#17161f", borderRadius: 12, fontSize: 13, color: "#8a8998", textAlign: "center" }}>Spécimen non débloqué. Ouvre des boîtes dans la boutique pour tenter ta chance.</div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -536,7 +553,7 @@ function ShopTab({ profile, game, persistProfile, showToast }) {
 
   const startRoll = async () => {
     const box = opening;
-    const r = rollBox(box);
+    const r = rollBox(box, profile.unlocked_character_ids || []);
     setResults(r);
 
     const patch = {};
@@ -1937,9 +1954,11 @@ function BoxForm({ row, game, onDone, onCancel, showToast }) {
   const removeCoinEntry = (i) => set({ coin_entries: f.coin_entries.filter((_, idx) => idx !== i) });
 
   const addCharEntry = () => { if (!charPick) return; set({ character_entries: [...(f.character_entries || []), { character_id: charPick, probability: 10 }] }); };
+  const updateCharEntry = (i, patch) => set({ character_entries: f.character_entries.map((e, idx) => idx === i ? { ...e, ...patch } : e) });
   const removeCharEntry = (i) => set({ character_entries: f.character_entries.filter((_, idx) => idx !== i) });
 
   const addItemEntry = () => { if (!itemPick) return; set({ item_entries: [...(f.item_entries || []), { item_id: itemPick, probability: 10 }] }); };
+  const updateItemEntry = (i, patch) => set({ item_entries: f.item_entries.map((e, idx) => idx === i ? { ...e, ...patch } : e) });
   const removeItemEntry = (i) => set({ item_entries: f.item_entries.filter((_, idx) => idx !== i) });
 
   const submit = async () => {
@@ -1980,8 +1999,9 @@ function BoxForm({ row, game, onDone, onCancel, showToast }) {
         {(f.character_entries || []).map((e, i) => { const c = game.characters.find((c) => c.id === e.character_id); return (
           <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, fontSize: 12 }}>
             <span style={{ flex: 1 }}>{c?.name || e.character_id}</span>
-            <span style={{ color: "#8a8998" }}>poids {e.probability}</span>
-            <button onClick={() => removeCharEntry(i)} style={{ all: "unset", cursor: "pointer", padding: "0 8px" }}>🗑️</button>
+            <span style={{ fontSize: 10.5, color: "#8a8998" }}>poids</span>
+            <input type="number" min={0} value={e.probability} onChange={(ev) => updateCharEntry(i, { probability: Math.max(0, parseInt(ev.target.value) || 0) })} style={{ ...inputStyle, marginBottom: 0, width: 64, textAlign: "center" }} />
+            <button onClick={() => removeCharEntry(i)} style={{ all: "unset", cursor: "pointer", padding: "0 6px" }}>🗑️</button>
           </div>
         ); })}
         <div style={{ display: "flex", gap: 6 }}>
@@ -1997,8 +2017,9 @@ function BoxForm({ row, game, onDone, onCancel, showToast }) {
         {(f.item_entries || []).map((e, i) => { const it = game.items.find((it) => it.id === e.item_id); return (
           <div key={i} style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6, fontSize: 12 }}>
             <span style={{ flex: 1 }}>{it?.name || e.item_id}</span>
-            <span style={{ color: "#8a8998" }}>poids {e.probability}</span>
-            <button onClick={() => removeItemEntry(i)} style={{ all: "unset", cursor: "pointer", padding: "0 8px" }}>🗑️</button>
+            <span style={{ fontSize: 10.5, color: "#8a8998" }}>poids</span>
+            <input type="number" min={0} value={e.probability} onChange={(ev) => updateItemEntry(i, { probability: Math.max(0, parseInt(ev.target.value) || 0) })} style={{ ...inputStyle, marginBottom: 0, width: 64, textAlign: "center" }} />
+            <button onClick={() => removeItemEntry(i)} style={{ all: "unset", cursor: "pointer", padding: "0 6px" }}>🗑️</button>
           </div>
         ); })}
         <div style={{ display: "flex", gap: 6 }}>
