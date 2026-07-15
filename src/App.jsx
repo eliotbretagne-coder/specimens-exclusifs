@@ -350,6 +350,7 @@ export default function App() {
         {tab === "shop" && <ShopTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "battle" && <BattleTab profile={profile} game={game} persistProfile={persistProfile} />}
         {tab === "friends" && <FriendsTab profile={profile} game={game} showToast={showToast} persistProfile={persistProfile} />}
+        {tab === "ideas" && <IdeasTab profile={profile} showToast={showToast} />}
         {tab === "news" && <NewsTab game={game} profile={profile} showToast={showToast} persistProfile={persistProfile} />}
         {tab === "profile" && <ProfileTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
@@ -397,6 +398,7 @@ function BottomNav({ tab, setTab, isAdmin, hasFriendNotif }) {
     { id: "shop", icon: "🎁", label: "Boutique" },
     { id: "battle", icon: "⚔️", label: "Combat" },
     { id: "friends", icon: "👥", label: "Amis", notif: hasFriendNotif },
+    { id: "ideas", icon: "💡", label: "Idées" },
     { id: "news", icon: "📰", label: "Actus" },
     { id: "profile", icon: "👤", label: "Profil" },
     ...(isAdmin ? [{ id: "admin", icon: "🛠️", label: "Admin" }] : []),
@@ -780,7 +782,12 @@ function BattleTab({ profile, game, persistProfile }) {
       if (over || itemConsumedId) {
         const patch = {};
         if (itemConsumedId) { const stacks = { ...(profile.item_stacks || {}) }; stacks[itemConsumedId] = Math.max(0, (stacks[itemConsumedId] || 0) - 1); patch.item_stacks = stacks; }
-        if (over) { const reward = result === "win" ? 40 + Math.floor(Math.random() * 60) : 15; patch.coins = (profile.coins || 0) + reward; if (result === "win") patch.battles_won = (profile.battles_won || 0) + 1; state.reward = reward; }
+        if (over) {
+          const reward = result === "win" ? 40 + Math.floor(Math.random() * 60) : -50;
+          patch.coins = Math.max(0, (profile.coins || 0) + reward);
+          if (result === "win") patch.battles_won = (profile.battles_won || 0) + 1;
+          state.reward = reward;
+        }
         persistProfile(patch);
       }
       return state;
@@ -836,7 +843,7 @@ function BattleTab({ profile, game, persistProfile }) {
           <div style={{ textAlign: "center", padding: "18px 0", background: fight.result === "win" ? "linear-gradient(160deg,#173322,#0e0e13)" : "linear-gradient(160deg,#331717,#0e0e13)", borderRadius: 16, border: `1.5px solid ${fight.result === "win" ? "#7cd99255" : "#ef6a6a55"}` }}>
             <div style={{ fontSize: 40, marginBottom: 6 }}>{fight.result === "win" ? "🏆" : "💀"}</div>
             <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 20, color: fight.result === "win" ? "#7cd992" : "#ef6a6a", marginBottom: 6 }}>{fight.result === "win" ? "Victoire !" : "Défaite"}</div>
-            <div style={{ fontSize: 14, color: "#F0A93A", fontWeight: 800, marginBottom: 16 }}>+{fight.reward} ⭐</div>
+            <div style={{ fontSize: 14, color: fight.reward >= 0 ? "#F0A93A" : "#ef6a6a", fontWeight: 800, marginBottom: 16 }}>{fight.reward >= 0 ? "+" : ""}{fight.reward} ⭐</div>
             <button onClick={() => { setFight(null); setTeam([]); }} style={{ all: "unset", cursor: "pointer", padding: "12px 28px", borderRadius: 12, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13.5 }}>Retour</button>
           </div>
         )}
@@ -1382,8 +1389,8 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
     if (finished && !rewardedRef.current) {
       rewardedRef.current = true;
       const iWon = (st.winner === "A" && isChallenger) || (st.winner === "B" && !isChallenger);
-      const reward = iWon ? 60 + Math.floor(Math.random() * 60) : 20;
-      const patch = { coins: (profile.coins || 0) + reward };
+      const reward = iWon ? 60 + Math.floor(Math.random() * 60) : -50;
+      const patch = { coins: Math.max(0, (profile.coins || 0) + reward) };
       if (iWon) patch.battles_won = (profile.battles_won || 0) + 1;
       persistProfile(patch);
     }
@@ -1586,8 +1593,9 @@ function NewsItem({ n, profile, showToast, persistProfile }) {
   };
 
   return (
-    <div style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 14, padding: 14 }}>
+    <div style={{ background: "#17161f", border: `1px solid ${n.is_update ? "#5B8DEF66" : "#24232d"}`, borderRadius: 14, padding: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        {n.is_update && <span style={{ fontSize: 10, fontWeight: 800, color: "#5B8DEF", background: "#1c2c4a", border: "1px solid #5B8DEF55", borderRadius: 5, padding: "3px 7px" }}>🆕 MISE À JOUR</span>}
         {n.pinned && <span style={{ fontSize: 12 }}>📌</span>}
         <div style={{ fontWeight: 800, fontSize: 14.5, flex: 1 }}>{n.title}</div>
         <div style={{ fontSize: 10.5, color: "#77768a", fontFamily: "'JetBrains Mono', monospace" }}>{n.published_at}</div>
@@ -1639,6 +1647,163 @@ function NewsItem({ n, profile, showToast, persistProfile }) {
 }
 
 /* ---------------------------------- Profil ---------------------------------- */
+
+/* ---------------------------------- Idées & Sondages ---------------------------------- */
+
+function IdeasTab({ profile, showToast }) {
+  const [polls, setPolls] = useState(null);
+  const [posts, setPosts] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [text, setText] = useState("");
+  const [type, setType] = useState("idea");
+  const [busy, setBusy] = useState(false);
+
+  const loadPolls = useCallback(async () => {
+    const { data: pollRows } = await supabase.from("polls").select("*").eq("is_active", true).order("created_at", { ascending: false });
+    if (!pollRows || pollRows.length === 0) { setPolls([]); return; }
+    const { data: votes } = await supabase.from("poll_votes").select("*").in("poll_id", pollRows.map((p) => p.id));
+    setPolls(pollRows.map((p) => ({ ...p, votes: (votes || []).filter((v) => v.poll_id === p.id) })));
+  }, []);
+
+  const loadPosts = useCallback(async () => {
+    const { data: postRows } = await supabase.from("feedback_posts").select("*").order("created_at", { ascending: false });
+    if (!postRows) { setPosts([]); return; }
+    const { data: voteRows } = await supabase.from("feedback_votes").select("*").in("post_id", postRows.map((p) => p.id).length ? postRows.map((p) => p.id) : ["00000000-0000-0000-0000-000000000000"]);
+    setPosts(postRows.map((p) => ({ ...p, votes: (voteRows || []).filter((v) => v.post_id === p.id) })));
+  }, []);
+
+  useEffect(() => { loadPolls(); loadPosts(); }, [loadPolls, loadPosts]);
+
+  useEffect(() => {
+    const ch = supabase.channel("ideas-tab")
+      .on("postgres_changes", { event: "*", schema: "public", table: "feedback_posts" }, loadPosts)
+      .on("postgres_changes", { event: "*", schema: "public", table: "feedback_votes" }, loadPosts)
+      .on("postgres_changes", { event: "*", schema: "public", table: "polls" }, loadPolls)
+      .on("postgres_changes", { event: "*", schema: "public", table: "poll_votes" }, loadPolls)
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [loadPolls, loadPosts]);
+
+  const votePoll = async (poll, optionIndex) => {
+    const { error } = await supabase.from("poll_votes").upsert({ poll_id: poll.id, user_id: profile.id, option_index: optionIndex }, { onConflict: "poll_id,user_id" });
+    if (error) showToast("Erreur : " + error.message); else loadPolls();
+  };
+
+  const votePost = async (post, value) => {
+    const mine = post.votes.find((v) => v.user_id === profile.id);
+    if (mine && mine.vote === value) {
+      await supabase.from("feedback_votes").delete().eq("post_id", post.id).eq("user_id", profile.id);
+    } else {
+      await supabase.from("feedback_votes").upsert({ post_id: post.id, user_id: profile.id, vote: value }, { onConflict: "post_id,user_id" });
+    }
+    loadPosts();
+  };
+
+  const submitPost = async () => {
+    if (!text.trim()) return;
+    setBusy(true);
+    const { error } = await supabase.from("feedback_posts").insert({ user_id: profile.id, username: profile.username, type, content: text.trim() });
+    setBusy(false);
+    if (error) showToast("Erreur : " + error.message); else { setText(""); showToast("Publié !"); loadPosts(); }
+  };
+
+  const deletePost = async (post) => {
+    await supabase.from("feedback_posts").delete().eq("id", post.id);
+    showToast("Supprimé.");
+    loadPosts();
+  };
+
+  const filteredPosts = (posts || []).filter((p) => filter === "all" || p.type === filter)
+    .sort((a, b) => {
+      const scoreA = a.votes.reduce((s, v) => s + v.vote, 0), scoreB = b.votes.reduce((s, v) => s + v.vote, 0);
+      return scoreB - scoreA;
+    });
+
+  return (
+    <div>
+      <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 4 }}>Idées & Problèmes</div>
+      <div style={{ fontSize: 12, color: "#8a8998", marginBottom: 16 }}>Propose des idées, signale un problème, vote pour ce que tu préfères.</div>
+
+      {polls && polls.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          {polls.map((poll) => <PollCard key={poll.id} poll={poll} profile={profile} onVote={votePoll} />)}
+        </div>
+      )}
+
+      <div style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 14, padding: 14, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          <button onClick={() => setType("idea")} style={{ all: "unset", cursor: "pointer", flex: 1, textAlign: "center", padding: "8px 0", borderRadius: 9, fontSize: 12, fontWeight: 700, background: type === "idea" ? "#2a2314" : "#1a1922", color: type === "idea" ? "#F0A93A" : "#8a8998", border: `1px solid ${type === "idea" ? "#F0A93A55" : "#2a2933"}` }}>💡 Idée</button>
+          <button onClick={() => setType("bug")} style={{ all: "unset", cursor: "pointer", flex: 1, textAlign: "center", padding: "8px 0", borderRadius: 9, fontSize: 12, fontWeight: 700, background: type === "bug" ? "#2a1414" : "#1a1922", color: type === "bug" ? "#ef6a6a" : "#8a8998", border: `1px solid ${type === "bug" ? "#ef6a6a55" : "#2a2933"}` }}>🐞 Problème</button>
+        </div>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder={type === "idea" ? "Ton idée pour une prochaine mise à jour…" : "Décris le problème rencontré…"} rows={3} style={{ ...inputStyle, resize: "vertical", fontFamily: "'Work Sans', sans-serif" }} />
+        <button disabled={busy || !text.trim()} onClick={submitPost} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", padding: "11px 0", borderRadius: 10, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13, opacity: busy || !text.trim() ? 0.5 : 1 }}>Publier</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {[["all", "Tout"], ["idea", "💡 Idées"], ["bug", "🐞 Problèmes"]].map(([id, label]) => (
+          <button key={id} onClick={() => setFilter(id)} style={{ all: "unset", cursor: "pointer", padding: "6px 12px", borderRadius: 20, fontSize: 11.5, fontWeight: 700, border: `1.5px solid ${filter === id ? "#F0A93A" : "#2a2933"}`, color: filter === id ? "#F0A93A" : "#8a8998", background: filter === id ? "#1c1b24" : "transparent" }}>{label}</button>
+        ))}
+      </div>
+
+      {posts === null && <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Chargement…</div>}
+      {posts && filteredPosts.length === 0 && <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Rien pour le moment.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {filteredPosts.map((p) => <FeedbackPost key={p.id} post={p} profile={profile} onVote={votePost} onDelete={deletePost} />)}
+      </div>
+    </div>
+  );
+}
+
+function PollCard({ poll, profile, onVote }) {
+  const myVote = poll.votes.find((v) => v.user_id === profile.id);
+  const total = poll.votes.length;
+  return (
+    <div style={{ background: "#1a1430", border: "1px solid #A855F755", borderRadius: 14, padding: 14, marginBottom: 10 }}>
+      <div style={{ fontSize: 10.5, color: "#A855F7", fontWeight: 800, marginBottom: 6, textTransform: "uppercase" }}>📊 Sondage</div>
+      <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 10 }}>{poll.question}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {(poll.options || []).map((opt, i) => {
+          const count = poll.votes.filter((v) => v.option_index === i).length;
+          const pct = total ? Math.round((count / total) * 100) : 0;
+          const mine = myVote?.option_index === i;
+          return (
+            <button key={i} onClick={() => onVote(poll, i)} style={{ all: "unset", cursor: "pointer", position: "relative", borderRadius: 9, padding: "9px 12px", background: "#111117", border: `1.5px solid ${mine ? "#A855F7" : "#2a2933"}`, overflow: "hidden" }}>
+              {myVote && <div style={{ position: "absolute", inset: 0, width: `${pct}%`, background: mine ? "#A855F733" : "#2a293355" }} />}
+              <div style={{ position: "relative", display: "flex", justifyContent: "space-between", fontSize: 12.5, fontWeight: mine ? 800 : 500 }}>
+                <span>{mine ? "✓ " : ""}{opt}</span>
+                {myVote && <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8a8998" }}>{pct}% ({count})</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FeedbackPost({ post, profile, onVote, onDelete }) {
+  const score = post.votes.reduce((s, v) => s + v.vote, 0);
+  const myVote = post.votes.find((v) => v.user_id === profile.id)?.vote;
+  const canDelete = post.user_id === profile.id || profile.is_admin;
+  return (
+    <div style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 12, padding: "11px 13px", display: "flex", gap: 12 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0 }}>
+        <button onClick={() => onVote(post, 1)} style={{ all: "unset", cursor: "pointer", fontSize: 15, opacity: myVote === 1 ? 1 : 0.4 }}>👍</button>
+        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: 12, color: score > 0 ? "#7cd992" : score < 0 ? "#ef6a6a" : "#8a8998" }}>{score}</span>
+        <button onClick={() => onVote(post, -1)} style={{ all: "unset", cursor: "pointer", fontSize: 15, opacity: myVote === -1 ? 1 : 0.4 }}>👎</button>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={{ fontSize: 12 }}>{post.type === "bug" ? "🐞" : "💡"}</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: "#5B8DEF" }}>{post.username}</span>
+          {canDelete && <button onClick={() => onDelete(post)} style={{ all: "unset", cursor: "pointer", marginLeft: "auto", fontSize: 12, opacity: 0.6 }}>🗑️</button>}
+        </div>
+        <div style={{ fontSize: 12.5, color: "#c2c1cc", lineHeight: 1.5 }}>{post.content}</div>
+      </div>
+    </div>
+  );
+}
+
 
 function ProfileTab({ profile, game, persistProfile, showToast }) {
   const [confirmReset, setConfirmReset] = useState(false);
@@ -1753,6 +1918,8 @@ function AdminTab({ game, reload, showToast }) {
     { id: "boxes", label: "Boîtes" },
     { id: "events", label: "Événements" },
     { id: "comments", label: "Commentaires" },
+    { id: "polls", label: "Sondages" },
+    { id: "ideas", label: "Idées" },
   ];
   const deleteRow = async (table, id) => {
     const { error } = await supabase.from(table).delete().eq("id", id);
@@ -1775,6 +1942,8 @@ function AdminTab({ game, reload, showToast }) {
 
       {section === "events" && <AdminEvents game={game} reload={reload} showToast={showToast} deleteRow={deleteRow} />}
       {section === "comments" && <AdminComments game={game} showToast={showToast} />}
+      {section === "polls" && <AdminPolls showToast={showToast} />}
+      {section === "ideas" && <AdminIdeas showToast={showToast} />}
       {section === "characters" && (<>
         <NewButton onClick={() => setEditing({ type: "characters", row: null })} label="+ Nouveau personnage" />
         <AdminList rows={game.characters} table="characters" deleteRow={deleteRow} onEdit={(r) => setEditing({ type: "characters", row: r })} renderRow={(c) => `${c.name} · ${RARITIES[c.rarity]?.label} · PTD ${c.ptd}`} />
@@ -2038,14 +2207,15 @@ function AdminEvents({ game, reload, showToast, deleteRow }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [pinned, setPinned] = useState(false);
+  const [isUpdate, setIsUpdate] = useState(false);
   const [coinReward, setCoinReward] = useState(0);
   const [busy, setBusy] = useState(false);
   const create = async () => {
     if (!title.trim() || !content.trim()) return;
     setBusy(true);
-    const { error } = await supabase.from("game_events").insert({ title, content, pinned, coin_reward: coinReward || 0, published_at: todayStr() });
+    const { error } = await supabase.from("game_events").insert({ title, content, pinned, is_update: isUpdate, coin_reward: coinReward || 0, published_at: todayStr() });
     setBusy(false);
-    if (error) showToast("Erreur : " + error.message); else { setTitle(""); setContent(""); setPinned(false); setCoinReward(0); showToast("Actu publiée."); reload(); }
+    if (error) showToast("Erreur : " + error.message); else { setTitle(""); setContent(""); setPinned(false); setIsUpdate(false); setCoinReward(0); showToast("Actu publiée."); reload(); }
   };
   return (
     <div>
@@ -2054,7 +2224,8 @@ function AdminEvents({ game, reload, showToast, deleteRow }) {
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Titre" style={inputStyle} />
         <textarea value={content} onChange={(e) => setContent(e.target.value)} placeholder="Contenu" rows={4} style={{ ...inputStyle, resize: "vertical", fontFamily: "'Work Sans', sans-serif" }} />
         <Field label="Pièces offertes (0 = aucune)"><input type="number" value={coinReward} onChange={(e) => setCoinReward(parseInt(e.target.value) || 0)} style={inputStyle} /></Field>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#c2c1cc", marginBottom: 12 }}><input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} /> Épingler</label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#c2c1cc", marginBottom: 8 }}><input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} /> Épingler</label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#c2c1cc", marginBottom: 12 }}><input type="checkbox" checked={isUpdate} onChange={(e) => setIsUpdate(e.target.checked)} /> 🆕 Marquer comme récapitulatif de mise à jour</label>
         <button disabled={busy} onClick={create} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", padding: "11px 0", borderRadius: 10, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13 }}>Publier</button>
       </div>
       <AdminList rows={game.events} table="game_events" deleteRow={deleteRow} onEdit={() => {}} renderRow={(n) => `${n.pinned ? "📌 " : ""}${n.title}${n.coin_reward ? ` · 🎁${n.coin_reward}` : ""} (${n.published_at})`} />
@@ -2104,3 +2275,88 @@ function AdminComments({ game, showToast }) {
     </div>
   );
 }
+
+function AdminPolls({ showToast }) {
+  const [polls, setPolls] = useState(null);
+  const [question, setQuestion] = useState("");
+  const [options, setOptions] = useState(["", ""]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("polls").select("*").order("created_at", { ascending: false });
+    setPolls(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const setOption = (i, v) => setOptions((opts) => opts.map((o, idx) => idx === i ? v : o));
+  const addOption = () => setOptions((opts) => [...opts, ""]);
+  const removeOption = (i) => setOptions((opts) => opts.filter((_, idx) => idx !== i));
+
+  const create = async () => {
+    const cleanOptions = options.map((o) => o.trim()).filter(Boolean);
+    if (!question.trim() || cleanOptions.length < 2) { showToast("Il faut une question et au moins 2 options."); return; }
+    setBusy(true);
+    const { error } = await supabase.from("polls").insert({ question: question.trim(), options: cleanOptions, is_active: true });
+    setBusy(false);
+    if (error) showToast("Erreur : " + error.message); else { setQuestion(""); setOptions(["", ""]); showToast("Sondage publié."); load(); }
+  };
+
+  const toggleActive = async (poll) => { await supabase.from("polls").update({ is_active: !poll.is_active }).eq("id", poll.id); load(); };
+  const remove = async (poll) => { await supabase.from("polls").delete().eq("id", poll.id); showToast("Sondage supprimé."); load(); };
+
+  return (
+    <div>
+      <div style={{ background: "#17161f", border: "1px solid #A855F755", borderRadius: 14, padding: 14, marginBottom: 16 }}>
+        <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 10 }}>+ Créer un sondage</div>
+        <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Question (ex: Quel type de contenu en priorité ?)" style={inputStyle} />
+        {options.map((o, i) => (
+          <div key={i} style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <input value={o} onChange={(e) => setOption(i, e.target.value)} placeholder={`Option ${i + 1}`} style={{ ...inputStyle, marginBottom: 0, flex: 1 }} />
+            {options.length > 2 && <button onClick={() => removeOption(i)} style={{ all: "unset", cursor: "pointer", padding: "0 8px" }}>🗑️</button>}
+          </div>
+        ))}
+        <button onClick={addOption} style={{ all: "unset", cursor: "pointer", fontSize: 11.5, color: "#A855F7", fontWeight: 700, display: "block", marginBottom: 12 }}>+ Ajouter une option</button>
+        <button disabled={busy} onClick={create} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", padding: "11px 0", borderRadius: 10, background: "linear-gradient(90deg,#A855F7,#EC4899)", color: "#fff", fontWeight: 800, fontSize: 13 }}>Publier le sondage</button>
+      </div>
+
+      {polls === null && <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Chargement…</div>}
+      {polls && polls.length === 0 && <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Aucun sondage créé.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {(polls || []).map((p) => (
+          <div key={p.id} style={{ background: "#17161f", border: `1px solid ${p.is_active ? "#A855F744" : "#2a2933"}`, borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>{p.question}</div>
+            <div style={{ fontSize: 11, color: "#8a8998", marginBottom: 8 }}>{(p.options || []).join(" · ")}</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => toggleActive(p)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: p.is_active ? "#F0A93A" : "#7cd992", padding: "5px 9px", borderRadius: 8, border: `1px solid ${p.is_active ? "#F0A93A55" : "#7cd99255"}` }}>{p.is_active ? "Clôturer" : "Réactiver"}</button>
+              <button onClick={() => remove(p)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#ef6a6a", padding: "5px 9px", borderRadius: 8, border: "1px solid #ef6a6a55" }}>Supprimer</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AdminIdeas({ showToast }) {
+  const [posts, setPosts] = useState(null);
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("feedback_posts").select("*").order("created_at", { ascending: false });
+    setPosts(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const remove = async (p) => { await supabase.from("feedback_posts").delete().eq("id", p.id); showToast("Supprimé."); load(); };
+
+  if (posts === null) return <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Chargement…</div>;
+  if (posts.length === 0) return <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Aucune idée pour le moment.</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {posts.map((p) => (
+        <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontSize: 12 }}>{p.type === "bug" ? "🐞" : "💡"} <strong>{p.username}</strong> — {p.content}</div>
+          <button onClick={() => remove(p)} style={{ all: "unset", cursor: "pointer", fontSize: 14, flexShrink: 0, marginLeft: 8 }}>🗑️</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
