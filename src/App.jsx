@@ -8,10 +8,13 @@ const RARITIES = {
   legendary:       { label: "Légendaire",        color: "#F0A93A", dim: "#4a3820" },
   mythic:          { label: "Mythique",          color: "#EF4444", dim: "#4a1f1f" },
   ultra_legendary: { label: "Ultra-Légendaire",  color: "#FFD54A", dim: "#4a3f1a", rainbow: true },
+  exclusive:       { label: "Exclusif",          color: "#FFD54A", dim: "#0c0c10", exclusiveFoil: true },
 };
-const RARITY_ORDER = ["rare", "super_rare", "epic", "mythic", "legendary", "ultra_legendary"];
+const RARITY_ORDER = ["rare", "super_rare", "epic", "mythic", "legendary", "ultra_legendary", "exclusive"];
+const COUNTABLE_RARITIES = RARITY_ORDER.filter((r) => r !== "exclusive");
+function countableCharacters(characters) { return characters.filter((c) => c.rarity !== "exclusive"); }
 const MAX_HP = 300, MAX_ATK = 150, MAX_SPEED = 10;
-const EMPTY_MOVE = { name: "", dmg: 0, heal: 0, desc: "" };
+const EMPTY_MOVE = { name: "", dmg: 0, heal: 0, desc: "", energy: 0 };
 
 const ACHIEVEMENTS = [
   { id: "first_box", title: "Premier tirage", desc: "Ouvre ta première boîte", icon: "🎁", reward: 20, check: (p) => (p.boxes_opened || 0) >= 1 },
@@ -19,7 +22,7 @@ const ACHIEVEMENTS = [
   { id: "box_50", title: "Accro aux boîtes", desc: "Ouvre 50 boîtes", icon: "🧨", reward: 150, check: (p) => (p.boxes_opened || 0) >= 50 },
   { id: "chars_5", title: "Petite collection", desc: "Débloque 5 spécimens", icon: "🃏", reward: 50, check: (p) => (p.unlocked_character_ids || []).length >= 5 },
   { id: "chars_10", title: "Grande collection", desc: "Débloque 10 spécimens", icon: "🗂️", reward: 100, check: (p) => (p.unlocked_character_ids || []).length >= 10 },
-  { id: "chars_all", title: "Collection complète", desc: "Débloque tous les spécimens", icon: "👑", reward: 500, check: (p, g) => g && g.characters.length > 0 && (p.unlocked_character_ids || []).length >= g.characters.length },
+  { id: "chars_all", title: "Collection complète", desc: "Débloque tous les spécimens", icon: "👑", reward: 500, check: (p, g) => { if (!g) return false; const total = countableCharacters(g.characters); if (!total.length) return false; const ownedCount = (p.unlocked_character_ids || []).filter((id) => total.some((c) => c.id === id)).length; return ownedCount >= total.length; } },
   { id: "win_1", title: "Premier sang", desc: "Gagne ton premier combat", icon: "🥊", reward: 30, check: (p) => (p.battles_won || 0) >= 1 },
   { id: "win_10", title: "Vétéran", desc: "Gagne 10 combats", icon: "⚔️", reward: 100, check: (p) => (p.battles_won || 0) >= 10 },
   { id: "win_25", title: "Champion", desc: "Gagne 25 combats", icon: "🏆", reward: 300, check: (p) => (p.battles_won || 0) >= 25 },
@@ -39,6 +42,8 @@ function weightedPick(entries) {
 }
 const SUPER_ENERGY_NEEDED = 100;
 const ENERGY_GAIN = { attack1: 25, attack2: 30, hitTaken: 15 };
+function superCost(character) { return character?.super?.energyCost ?? SUPER_ENERGY_NEEDED; }
+function moveEnergyGain(character, moveKey) { return character?.[moveKey]?.energy ?? ENERGY_GAIN[moveKey] ?? 0; }
 
 function computeDamage(attackerSpeed, defenderSpeed, baseDmg) {
   const diff = (attackerSpeed || 0) - (defenderSpeed || 0);
@@ -79,6 +84,17 @@ function rollBox(box, ownedCharacterIds = []) {
 
 function RarityTag({ rarity }) {
   const r = RARITIES[rarity] || RARITIES.rare;
+  if (r.exclusiveFoil) {
+    return (
+      <span style={{
+        fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 800,
+        letterSpacing: 0.5, textTransform: "uppercase", color: "#0c0c10",
+        background: "linear-gradient(90deg,#FFD54A,#fff3c0,#FFD54A)",
+        border: "1px solid #FFD54A", borderRadius: 5, padding: "3px 7px", display: "inline-block",
+        boxShadow: "0 0 8px #FFD54A88",
+      }}>✨ {r.label}</span>
+    );
+  }
   if (r.rainbow) {
     return (
       <span style={{
@@ -118,15 +134,17 @@ function StatBar({ icon, value, max, color }) {
 function CharCard({ character, locked, onClick, small }) {
   const r = RARITIES[character.rarity] || RARITIES.rare;
   const foil = character.rarity === "ultra_legendary";
+  const exclusiveFoil = character.rarity === "exclusive";
   return (
     <button onClick={onClick} style={{
       all: "unset", cursor: "pointer", position: "relative",
       width: small ? 92 : "100%", aspectRatio: "3/4.1",
       borderRadius: 14, overflow: "hidden", boxSizing: "border-box",
       background: locked ? "#1a1a22" : "#1d1c26",
-      border: foil ? "2px solid transparent" : `1.5px solid ${locked ? "#33333f" : r.color + "88"}`,
-      backgroundImage: foil && !locked ? "linear-gradient(#1d1c26,#1d1c26), conic-gradient(from 0deg, #FFD54A, #EC4899, #A855F7, #5B8DEF, #4ADE80, #FFD54A)" : undefined,
-      backgroundOrigin: "border-box", backgroundClip: foil && !locked ? "padding-box, border-box" : undefined,
+      border: (foil || exclusiveFoil) ? "2px solid transparent" : `1.5px solid ${locked ? "#33333f" : r.color + "88"}`,
+      backgroundImage: !locked && foil ? "linear-gradient(#1d1c26,#1d1c26), conic-gradient(from 0deg, #FFD54A, #EC4899, #A855F7, #5B8DEF, #4ADE80, #FFD54A)"
+        : !locked && exclusiveFoil ? "linear-gradient(#1d1c26,#1d1c26), conic-gradient(from 0deg, #FFD54A, #0c0c10, #FFD54A, #fff3c0, #0c0c10, #FFD54A)" : undefined,
+      backgroundOrigin: "border-box", backgroundClip: (foil || exclusiveFoil) && !locked ? "padding-box, border-box" : undefined,
       boxShadow: locked ? "none" : `0 0 16px ${r.color}33`,
     }}>
       <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column" }}>
@@ -422,14 +440,15 @@ function BottomNav({ tab, setTab, isAdmin, hasFriendNotif }) {
 
 function SpecimensTab({ profile, game, onOpen }) {
   const [filter, setFilter] = useState("all");
-  const owned = profile.unlocked_character_ids?.length || 0;
+  const countable = countableCharacters(game.characters);
+  const owned = (profile.unlocked_character_ids || []).filter((id) => countable.some((c) => c.id === id)).length;
   const list = filter === "all" ? game.characters : game.characters.filter((c) => c.rarity === filter);
   const sorted = [...list].sort((a, b) => RARITY_ORDER.indexOf(b.rarity) - RARITY_ORDER.indexOf(a.rarity));
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
         <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18 }}>Collection</div>
-        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: "#9a99a8" }}>{owned}/{game.characters.length}</div>
+        <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12.5, color: "#9a99a8" }}>{owned}/{countable.length}</div>
       </div>
       <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "12px 0 14px" }}>
         {["all", ...RARITY_ORDER].map((r) => (
@@ -749,7 +768,7 @@ function BattleTab({ profile, game, persistProfile }) {
       // bot AI: prefers its strongest move, uses super as soon as it's charged
       let botMoveKey = "attack1";
       if (bc.attack2 && (bc.attack2.dmg || 0) > (bc.attack1.dmg || 0)) botMoveKey = "attack2";
-      if (bc.super && (bc.energy || 0) >= SUPER_ENERGY_NEEDED) botMoveKey = "super";
+      if (bc.super && (bc.energy || 0) >= superCost(bc)) botMoveKey = "super";
       const playerMoveKey = playerAction.type === "move" ? playerAction.moveKey : "attack1";
 
       const applyMove = (side, attacker, defender, moveKey) => {
@@ -760,11 +779,11 @@ function BattleTab({ profile, game, persistProfile }) {
         if (dmg > 0) {
           hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super", crit, dodge });
           log.push(`${attacker.name} ▸ ${move.name} : -${dmg}${crit ? " 🎯 critique !" : dodge ? " (esquive partielle)" : ""}`);
-          defender.energy = Math.min(SUPER_ENERGY_NEEDED, (defender.energy || 0) + ENERGY_GAIN.hitTaken);
+          defender.energy = Math.min(superCost(defender), (defender.energy || 0) + ENERGY_GAIN.hitTaken);
         }
         if (move.heal) { attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal); hits.push({ side, index: side === "p" ? pIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attacker.name} soigné +${move.heal}`); }
         if (moveKey === "super") attacker.energy = 0;
-        else attacker.energy = Math.min(SUPER_ENERGY_NEEDED, (attacker.energy || 0) + (ENERGY_GAIN[moveKey] || 0));
+        else attacker.energy = Math.min(superCost(attacker), (attacker.energy || 0) + moveEnergyGain(attacker, moveKey));
       };
       const order = pc.speed >= bc.speed ? ["p", "bot"] : ["bot", "p"];
       for (const turn of order) {
@@ -823,8 +842,8 @@ function BattleTab({ profile, game, persistProfile }) {
                 <div style={{ fontSize: 12.5, fontWeight: 800 }}>Choisis l'action de {pc.name}</div>
                 {pc.super && (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
-                    <div style={{ flex: 1, height: 5, background: "#2a2933", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, pc.energy || 0)}%`, background: (pc.energy || 0) >= SUPER_ENERGY_NEEDED ? "#FFD54A" : "#5B8DEF", boxShadow: (pc.energy || 0) >= SUPER_ENERGY_NEEDED ? "0 0 6px #FFD54A" : "none" }} /></div>
-                    <span style={{ fontSize: 9.5, color: "#8a8998", fontFamily: "'JetBrains Mono', monospace" }}>⚡{Math.min(100, pc.energy || 0)}/100</span>
+                    <div style={{ flex: 1, height: 5, background: "#2a2933", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, ((pc.energy || 0) / superCost(pc)) * 100)}%`, background: (pc.energy || 0) >= superCost(pc) ? "#FFD54A" : "#5B8DEF", boxShadow: (pc.energy || 0) >= superCost(pc) ? "0 0 6px #FFD54A" : "none" }} /></div>
+                    <span style={{ fontSize: 9.5, color: "#8a8998", fontFamily: "'JetBrains Mono', monospace" }}>⚡{Math.min(superCost(pc), pc.energy || 0)}/{superCost(pc)}</span>
                   </div>
                 )}
               </div>
@@ -832,7 +851,7 @@ function BattleTab({ profile, game, persistProfile }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               <ActionBtn label={pc.attack1?.name} sub={`-${pc.attack1?.dmg || 0} dégâts`} icon="🥊" kind="attack1" onClick={() => doTurn({ type: "move", moveKey: "attack1" })} />
               {pc.attack2 && (pc.attack2.dmg > 0 || pc.attack2.heal > 0) && <ActionBtn label={pc.attack2.name} sub={pc.attack2.dmg ? `-${pc.attack2.dmg} dégâts` : `+${pc.attack2.heal} PV`} icon="💥" kind="attack2" onClick={() => doTurn({ type: "move", moveKey: "attack2" })} />}
-              {pc.super && <ActionBtn label={pc.super.name} sub={(pc.energy || 0) >= SUPER_ENERGY_NEEDED ? `SUPER · -${pc.super.dmg}` : `Charge : ${Math.min(100, pc.energy || 0)}/100`} icon="🌟" kind="super" disabled={(pc.energy || 0) < SUPER_ENERGY_NEEDED} onClick={() => doTurn({ type: "move", moveKey: "super" })} />}
+              {pc.super && <ActionBtn label={pc.super.name} sub={(pc.energy || 0) >= superCost(pc) ? `SUPER · -${pc.super.dmg}` : `Charge : ${Math.min(superCost(pc), pc.energy || 0)}/${superCost(pc)}`} icon="🌟" kind="super" disabled={(pc.energy || 0) < superCost(pc)} onClick={() => doTurn({ type: "move", moveKey: "super" })} />}
             </div>
             {myItems.length > 0 && (<>
               <div style={{ fontSize: 11, color: "#A855F7", fontWeight: 800, margin: "12px 0 6px", textTransform: "uppercase" }}>🎒 Objets actifs</div>
@@ -1443,14 +1462,14 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
         <>
           {myChar.super && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
-              <div style={{ flex: 1, height: 5, background: "#2a2933", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, myEnergy[myActive] || 0)}%`, background: (myEnergy[myActive] || 0) >= SUPER_ENERGY_NEEDED ? "#FFD54A" : "#5B8DEF", boxShadow: (myEnergy[myActive] || 0) >= SUPER_ENERGY_NEEDED ? "0 0 6px #FFD54A" : "none" }} /></div>
-              <span style={{ fontSize: 9.5, color: "#8a8998", fontFamily: "'JetBrains Mono', monospace" }}>⚡{Math.min(100, myEnergy[myActive] || 0)}/100</span>
+              <div style={{ flex: 1, height: 5, background: "#2a2933", borderRadius: 3, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, ((myEnergy[myActive] || 0) / superCost(myChar)) * 100)}%`, background: (myEnergy[myActive] || 0) >= superCost(myChar) ? "#FFD54A" : "#5B8DEF", boxShadow: (myEnergy[myActive] || 0) >= superCost(myChar) ? "0 0 6px #FFD54A" : "none" }} /></div>
+              <span style={{ fontSize: 9.5, color: "#8a8998", fontFamily: "'JetBrains Mono', monospace" }}>⚡{Math.min(superCost(myChar), myEnergy[myActive] || 0)}/{superCost(myChar)}</span>
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
             <ActionBtn label={myChar.attack1?.name} sub={`-${myChar.attack1?.dmg || 0}`} icon="🥊" kind="attack1" onClick={() => chooseAction("attack1")} />
             {myChar.attack2 && (myChar.attack2.dmg > 0 || myChar.attack2.heal > 0) && <ActionBtn label={myChar.attack2.name} sub={myChar.attack2.dmg ? `-${myChar.attack2.dmg}` : `+${myChar.attack2.heal} PV`} icon="💥" kind="attack2" onClick={() => chooseAction("attack2")} />}
-            {myChar.super && <ActionBtn label={myChar.super.name} sub={(myEnergy[myActive] || 0) >= SUPER_ENERGY_NEEDED ? `SUPER · -${myChar.super.dmg}` : `Charge : ${Math.min(100, myEnergy[myActive] || 0)}/100`} icon="🌟" kind="super" disabled={(myEnergy[myActive] || 0) < SUPER_ENERGY_NEEDED} onClick={() => chooseAction("super")} />}
+            {myChar.super && <ActionBtn label={myChar.super.name} sub={(myEnergy[myActive] || 0) >= superCost(myChar) ? `SUPER · -${myChar.super.dmg}` : `Charge : ${Math.min(superCost(myChar), myEnergy[myActive] || 0)}/${superCost(myChar)}`} icon="🌟" kind="super" disabled={(myEnergy[myActive] || 0) < superCost(myChar)} onClick={() => chooseAction("super")} />}
           </div>
         </>
       )}
@@ -1507,11 +1526,11 @@ function resolveFriendTurn(st, game) {
     if (dmg > 0) {
       hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super", crit, dodge });
       log.push(`${attackerChar.name} ▸ ${move.name} : -${dmg}${crit ? " 🎯 critique !" : dodge ? " (esquive partielle)" : ""}`);
-      defenderEnergyArr[defenderActive] = Math.min(SUPER_ENERGY_NEEDED, (defenderEnergyArr[defenderActive] || 0) + ENERGY_GAIN.hitTaken);
+      defenderEnergyArr[defenderActive] = Math.min(superCost(defenderChar), (defenderEnergyArr[defenderActive] || 0) + ENERGY_GAIN.hitTaken);
     }
     if (move.heal) { attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal); hits.push({ side, index: side === "A" ? aIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attackerChar.name} soigné +${move.heal}`); }
     if (moveKey === "super") attackerEnergyArr[attackerActive] = 0;
-    else attackerEnergyArr[attackerActive] = Math.min(SUPER_ENERGY_NEEDED, (attackerEnergyArr[attackerActive] || 0) + (ENERGY_GAIN[moveKey] || 0));
+    else attackerEnergyArr[attackerActive] = Math.min(superCost(attackerChar), (attackerEnergyArr[attackerActive] || 0) + moveEnergyGain(attackerChar, moveKey));
   };
   const order = charA.speed >= charB.speed ? ["A", "B"] : ["B", "A"];
   for (const turn of order) {
@@ -1836,7 +1855,7 @@ function ProfileTab({ profile, game, persistProfile, showToast }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
         <MiniStat label="Pièces" value={(profile.coins ?? 0).toLocaleString("fr-FR")} icon="⭐" />
-        <MiniStat label="Spécimens" value={`${(profile.unlocked_character_ids || []).length}/${game.characters.length}`} icon="🃏" />
+        <MiniStat label="Spécimens" value={`${(profile.unlocked_character_ids || []).filter((id) => countableCharacters(game.characters).some((c) => c.id === id)).length}/${countableCharacters(game.characters).length}`} icon="🃏" />
       </div>
 
       {profile.is_admin && (
@@ -2037,7 +2056,7 @@ function ImageUploadField({ label, value, onChange, folder }) {
   );
 }
 
-function MoveFields({ label, move, onChange }) {
+function MoveFields({ label, move, onChange, energyMode }) {
   const m = move || EMPTY_MOVE;
   const set = (patch) => onChange({ ...m, ...patch });
   return (
@@ -2048,6 +2067,12 @@ function MoveFields({ label, move, onChange }) {
         <input type="number" placeholder="Dégâts" value={m.dmg || 0} onChange={(e) => set({ dmg: parseInt(e.target.value) || 0 })} style={{ ...inputStyle, flex: 1 }} />
         <input type="number" placeholder="Soin" value={m.heal || 0} onChange={(e) => set({ heal: parseInt(e.target.value) || 0 })} style={{ ...inputStyle, flex: 1 }} />
       </div>
+      {energyMode === "gain" && (
+        <Field label="⚡ Énergie gagnée en l'utilisant"><input type="number" min={0} value={m.energy ?? 0} onChange={(e) => set({ energy: Math.max(0, parseInt(e.target.value) || 0) })} style={inputStyle} /></Field>
+      )}
+      {energyMode === "cost" && (
+        <Field label="⚡ Énergie requise pour l'activer"><input type="number" min={1} value={m.energyCost ?? SUPER_ENERGY_NEEDED} onChange={(e) => set({ energyCost: Math.max(1, parseInt(e.target.value) || 1) })} style={inputStyle} /></Field>
+      )}
       <textarea placeholder="Description" value={m.desc || ""} onChange={(e) => set({ desc: e.target.value })} rows={2} style={{ ...inputStyle, resize: "vertical", fontFamily: "'Work Sans', sans-serif" }} />
     </div>
   );
@@ -2077,9 +2102,9 @@ function CharacterForm({ row, onDone, onCancel, showToast }) {
         <Field label="Vitesse"><input type="number" value={f.speed} onChange={(e) => set({ speed: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
         <Field label="PTD"><input type="number" value={f.ptd} onChange={(e) => set({ ptd: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
       </div>
-      <MoveFields label="Attaque 1" move={f.attack1} onChange={(m) => set({ attack1: m })} />
-      <MoveFields label="Attaque 2" move={f.attack2} onChange={(m) => set({ attack2: m })} />
-      <MoveFields label="Super" move={f.super} onChange={(m) => set({ super: m })} />
+      <MoveFields label="Attaque 1" move={f.attack1} onChange={(m) => set({ attack1: m })} energyMode="gain" />
+      <MoveFields label="Attaque 2" move={f.attack2} onChange={(m) => set({ attack2: m })} energyMode="gain" />
+      <MoveFields label="Super" move={f.super} onChange={(m) => set({ super: m })} energyMode="cost" />
     </FormShell>
   );
 }
