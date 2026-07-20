@@ -440,10 +440,13 @@ function BottomNav({ tab, setTab, isAdmin, hasFriendNotif }) {
 
 function SpecimensTab({ profile, game, onOpen }) {
   const [filter, setFilter] = useState("all");
+  const [itemFilter, setItemFilter] = useState("all");
   const countable = countableCharacters(game.characters);
   const owned = (profile.unlocked_character_ids || []).filter((id) => countable.some((c) => c.id === id)).length;
-  const list = filter === "all" ? game.characters : game.characters.filter((c) => c.rarity === filter);
+  const list = filter === "all" ? countableCharacters(game.characters) : game.characters.filter((c) => c.rarity === filter);
   const sorted = [...list].sort((a, b) => RARITY_ORDER.indexOf(b.rarity) - RARITY_ORDER.indexOf(a.rarity));
+  const itemList = itemFilter === "all" ? game.items : game.items.filter((it) => it.rarity === itemFilter);
+  const sortedItems = [...itemList].sort((a, b) => RARITY_ORDER.indexOf(b.rarity) - RARITY_ORDER.indexOf(a.rarity));
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
@@ -459,12 +462,17 @@ function SpecimensTab({ profile, game, onOpen }) {
         {sorted.map((c) => <CharCard key={c.id} character={c} locked={!profile.unlocked_character_ids?.includes(c.id)} onClick={() => onOpen(c)} />)}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 26, marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 26, marginBottom: 4 }}>
         <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 16 }}>Objets</div>
         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: "#9a99a8" }}>{(profile.unlocked_item_ids || []).length}/{game.items.length}</div>
       </div>
+      <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "12px 0 14px" }}>
+        {["all", ...new Set(game.items.map((it) => it.rarity))].sort((a, b) => a === "all" ? -1 : b === "all" ? 1 : RARITY_ORDER.indexOf(a) - RARITY_ORDER.indexOf(b)).map((r) => (
+          <button key={r} onClick={() => setItemFilter(r)} style={{ all: "unset", cursor: "pointer", whiteSpace: "nowrap", padding: "6px 12px", borderRadius: 20, fontSize: 11.5, fontWeight: 700, border: `1.5px solid ${itemFilter === r ? (r === "all" ? "#F0A93A" : RARITIES[r].color) : "#2a2933"}`, color: itemFilter === r ? (r === "all" ? "#F0A93A" : RARITIES[r].color) : "#8a8998", background: itemFilter === r ? "#1c1b24" : "transparent" }}>{r === "all" ? "Tous" : RARITIES[r]?.label || r}</button>
+        ))}
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-        {game.items.map((it) => {
+        {sortedItems.map((it) => {
           const owned = (profile.unlocked_item_ids || []).includes(it.id);
           const stock = profile.item_stacks?.[it.id] || 0;
           const limit = it.stack_limit ?? 5;
@@ -528,8 +536,8 @@ function CharModal({ character, owned, onClose }) {
         <div style={{ position: "relative", width: "100%", aspectRatio: "16/11", background: "#0e0e13" }}>
           {character.image_url && owned ? <img src={character.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 54 }}>{owned ? "🃏" : "🔒"}</div>}
           <div style={{ position: "absolute", top: 12, left: 12 }}><RarityTag rarity={character.rarity} /></div>
-          <button onClick={onClose} style={{ all: "unset", cursor: "pointer", position: "absolute", top: 10, right: 10, width: 30, height: 30, borderRadius: "50%", background: "rgba(10,10,14,0.6)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>✕</button>
-          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 60%, #141319 100%)" }} />
+          <button onClick={onClose} style={{ all: "unset", cursor: "pointer", position: "absolute", top: 10, right: 10, width: 30, height: 30, borderRadius: "50%", background: "rgba(10,10,14,0.6)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, zIndex: 2 }}>✕</button>
+          <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 60%, #141319 100%)", pointerEvents: "none" }} />
         </div>
         <div style={{ padding: "0 18px 26px", marginTop: -8 }}>
           <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 21, marginBottom: 2 }}>{owned ? character.name : "???"}</div>
@@ -561,6 +569,7 @@ function ShopTab({ profile, game, persistProfile, showToast }) {
   const [opening, setOpening] = useState(null);
   const [results, setResults] = useState(null);
   const [revealed, setRevealed] = useState(0);
+  const [oddsBox, setOddsBox] = useState(null);
   const charById = (id) => game.characters.find((c) => c.id === id);
   const itemById = (id) => game.items.find((i) => i.id === id);
   const freeClaimedToday = profile.last_free_box_claim === todayStr();
@@ -606,7 +615,8 @@ function ShopTab({ profile, game, persistProfile, showToast }) {
       <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 14 }}>Boutique</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         {activeBoxes.map((box) => (
-          <div key={box.id} style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 16, padding: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+          <div key={box.id} style={{ background: "#17161f", border: "1px solid #24232d", borderRadius: 16, padding: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 8, position: "relative" }}>
+            <button onClick={() => setOddsBox(box)} style={{ all: "unset", cursor: "pointer", position: "absolute", top: 8, right: 8, width: 24, height: 24, borderRadius: "50%", background: "#0e0e13cc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>ℹ️</button>
             <div style={{ width: "100%", aspectRatio: "1", borderRadius: 12, overflow: "hidden", background: "#0e0e13" }}>
               {box.image_url ? <img src={box.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 34 }}>🎁</div>}
             </div>
@@ -621,6 +631,8 @@ function ShopTab({ profile, game, persistProfile, showToast }) {
         ))}
       </div>
 
+      {oddsBox && <BoxOddsModal box={oddsBox} charById={charById} itemById={itemById} onClose={() => setOddsBox(null)} />}
+
       {opening && (
         <BoxOpenOverlay
           box={opening} results={results} revealed={revealed}
@@ -630,6 +642,37 @@ function ShopTab({ profile, game, persistProfile, showToast }) {
           charById={charById} itemById={itemById}
         />
       )}
+    </div>
+  );
+}
+
+function BoxOddsModal({ box, charById, itemById, onClose }) {
+  const pool = [
+    ...(box.coin_entries || []).map((e) => ({ kind: "coin", label: `🪙 ${e.amount} pièces`, p: e.probability })),
+    ...(box.character_entries || []).map((e) => { const c = charById(e.character_id); return { kind: "char", label: c?.name || "?", rarity: c?.rarity, p: e.probability }; }),
+    ...(box.item_entries || []).map((e) => { const it = itemById(e.item_id); return { kind: "item", label: it?.name || "?", rarity: it?.rarity, p: e.probability }; }),
+  ];
+  const total = pool.reduce((s, e) => s + e.p, 0) || 1;
+  const sorted = [...pool].sort((a, b) => b.p - a.p);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.82)", zIndex: 320, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, maxHeight: "80vh", overflowY: "auto", background: "#141319", borderRadius: "20px 20px 0 0", padding: "18px 18px 26px", border: "1px solid #F0A93A44", borderBottom: "none" }}>
+        <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 16, marginBottom: 4 }}>{box.name}</div>
+        <div style={{ fontSize: 11.5, color: "#8a8998", marginBottom: 14 }}>Chances d'obtenir chaque récompense sur un tirage ({box.rewards_count} tirage{box.rewards_count > 1 ? "s" : ""} par ouverture).</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {sorted.map((e, i) => {
+            const pct = (e.p / total * 100);
+            const r = e.rarity ? RARITIES[e.rarity] : null;
+            return (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: "#17161f", border: "1px solid #24232d", borderRadius: 9, padding: "8px 11px" }}>
+                <div style={{ flex: 1, fontSize: 12.5, fontWeight: 600 }}>{e.label} {r && <span style={{ marginLeft: 6 }}><RarityTag rarity={e.rarity} /></span>}</div>
+                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: 12.5, color: "#F0A93A" }}>{pct.toFixed(pct < 1 ? 2 : 1)}%</div>
+              </div>
+            );
+          })}
+        </div>
+        <button onClick={onClose} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", marginTop: 16, padding: "12px 0", borderRadius: 12, background: "#1e1d27", color: "#c2c1cc", fontWeight: 700, fontSize: 13 }}>Fermer</button>
+      </div>
     </div>
   );
 }
@@ -742,7 +785,7 @@ function BattleTab({ profile, game, persistProfile }) {
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [fight?.log]);
   const toggleTeam = (id) => setTeam((t) => t.includes(id) ? t.filter((x) => x !== id) : (t.length < 3 ? [...t, id] : t));
   const charById = (id) => game.characters.find((c) => c.id === id);
-  const pickBotTeam = () => [...game.characters].sort(() => Math.random() - 0.5).slice(0, 3);
+  const pickBotTeam = () => [...countableCharacters(game.characters)].sort(() => Math.random() - 0.5).slice(0, 3);
 
   const startFight = () => {
     const botTeam = pickBotTeam();
@@ -2100,7 +2143,17 @@ function CharacterForm({ row, onDone, onCancel, showToast }) {
       <div style={{ display: "flex", gap: 8 }}>
         <Field label="PV"><input type="number" value={f.hp} onChange={(e) => set({ hp: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
         <Field label="Vitesse"><input type="number" value={f.speed} onChange={(e) => set({ speed: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
-        <Field label="PTD"><input type="number" value={f.ptd} onChange={(e) => set({ ptd: parseInt(e.target.value) || 0 })} style={inputStyle} /></Field>
+        <Field label="PTD">
+          <div style={{ display: "flex", gap: 6 }}>
+            <input type="number" value={f.ptd} onChange={(e) => set({ ptd: parseInt(e.target.value) || 0 })} style={{ ...inputStyle, flex: 1 }} />
+            <button onClick={() => {
+              const V = f.hp || 0, A = f.attack1?.dmg || 0, S = f.speed || 0, U = f.super?.dmg || 0;
+              const M = ((f.attack1?.dmg || 0) + (f.attack2?.dmg || 0)) / 2;
+              const ptd = Math.round((V / 300) * 15 + (A / 150) * 15 + (S / 10) * 20 + (M / 100) * 20 + (U / 250) * 30);
+              set({ ptd });
+            }} style={{ all: "unset", cursor: "pointer", padding: "0 12px", borderRadius: 10, background: "#2a2314", border: "1px solid #F0A93A55", color: "#F0A93A", fontWeight: 800, fontSize: 11, whiteSpace: "nowrap" }}>🧮 Auto</button>
+          </div>
+        </Field>
       </div>
       <MoveFields label="Attaque 1" move={f.attack1} onChange={(m) => set({ attack1: m })} energyMode="gain" />
       <MoveFields label="Attaque 2" move={f.attack2} onChange={(m) => set({ attack2: m })} energyMode="gain" />
