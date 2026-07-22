@@ -45,6 +45,13 @@ const ENERGY_GAIN = { attack1: 25, attack2: 30, hitTaken: 15 };
 function superCost(character) { return character?.super?.energyCost ?? SUPER_ENERGY_NEEDED; }
 function moveEnergyGain(character, moveKey) { return character?.[moveKey]?.energy ?? ENERGY_GAIN[moveKey] ?? 0; }
 
+// débutants (peu de cartes) perdent moins en cas de défaite — ils ne peuvent pas grand-chose contre des équipes bien équipées
+function lossPenalty(ownedCharCount) {
+  if (ownedCharCount < 4) return -10;
+  if (ownedCharCount < 8) return -25;
+  return -50;
+}
+
 function computeDamage(attackerSpeed, defenderSpeed, baseDmg) {
   const diff = (attackerSpeed || 0) - (defenderSpeed || 0);
   let dmg = baseDmg, crit = false, dodge = false;
@@ -131,7 +138,7 @@ function StatBar({ icon, value, max, color }) {
   );
 }
 
-function CharCard({ character, locked, onClick, small }) {
+function CharCard({ character, locked, onClick, small, favorite }) {
   const r = RARITIES[character.rarity] || RARITIES.rare;
   const foil = character.rarity === "ultra_legendary";
   const exclusiveFoil = character.rarity === "exclusive";
@@ -155,6 +162,7 @@ function CharCard({ character, locked, onClick, small }) {
             <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30 }}>{locked ? "🔒" : "🃏"}</div>
           )}
           {locked && <div style={{ position: "absolute", inset: 0, background: "rgba(10,10,14,0.55)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>🔒</div>}
+          {favorite && !locked && <div style={{ position: "absolute", top: 5, left: 5, fontSize: 15, filter: "drop-shadow(0 1px 3px rgba(0,0,0,0.8))" }}>⭐</div>}
         </div>
         <div style={{ padding: "6px 7px 8px", background: "#17161f" }}>
           <div style={{ fontFamily: "Bungee, sans-serif", fontSize: small ? 10 : 12, color: locked ? "#55555f" : "#f4f2ec", lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -374,7 +382,7 @@ export default function App() {
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
       </div>
       <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} hasFriendNotif={hasFriendNotif} />
-      {detailChar && <CharModal character={detailChar} owned={profile.unlocked_character_ids?.includes(detailChar.id)} onClose={() => setDetailChar(null)} />}
+      {detailChar && <CharModal character={detailChar} owned={profile.unlocked_character_ids?.includes(detailChar.id)} isFavorite={(profile.favorite_character_ids || []).includes(detailChar.id)} onToggleFavorite={() => { const favs = profile.favorite_character_ids || []; const next = favs.includes(detailChar.id) ? favs.filter((id) => id !== detailChar.id) : [...favs, detailChar.id]; persistProfile({ favorite_character_ids: next }); }} onClose={() => setDetailChar(null)} />}
       {toast && <Toast text={toast} />}
     </div>
   );
@@ -459,7 +467,7 @@ function SpecimensTab({ profile, game, onOpen }) {
         ))}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-        {sorted.map((c) => <CharCard key={c.id} character={c} locked={!profile.unlocked_character_ids?.includes(c.id)} onClick={() => onOpen(c)} />)}
+        {sorted.map((c) => <CharCard key={c.id} character={c} locked={!profile.unlocked_character_ids?.includes(c.id)} favorite={(profile.favorite_character_ids || []).includes(c.id)} onClick={() => onOpen(c)} />)}
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 26, marginBottom: 4 }}>
@@ -528,7 +536,7 @@ function MoveRow({ label, move, ulti, rarityColor }) {
   );
 }
 
-function CharModal({ character, owned, onClose }) {
+function CharModal({ character, owned, isFavorite, onToggleFavorite, onClose }) {
   const r = RARITIES[character.rarity];
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.82)", zIndex: 300, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
@@ -536,6 +544,7 @@ function CharModal({ character, owned, onClose }) {
         <div style={{ position: "relative", width: "100%", aspectRatio: "16/11", background: "#0e0e13" }}>
           {character.image_url && owned ? <img src={character.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 54 }}>{owned ? "🃏" : "🔒"}</div>}
           <div style={{ position: "absolute", top: 12, left: 12 }}><RarityTag rarity={character.rarity} /></div>
+          {owned && <button onClick={onToggleFavorite} style={{ all: "unset", cursor: "pointer", position: "absolute", top: 10, right: 48, width: 30, height: 30, borderRadius: "50%", background: "rgba(10,10,14,0.6)", color: isFavorite ? "#FFD54A" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, zIndex: 2 }}>{isFavorite ? "⭐" : "☆"}</button>}
           <button onClick={onClose} style={{ all: "unset", cursor: "pointer", position: "absolute", top: 10, right: 10, width: 30, height: 30, borderRadius: "50%", background: "rgba(10,10,14,0.6)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, zIndex: 2 }}>✕</button>
           <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 60%, #141319 100%)", pointerEvents: "none" }} />
         </div>
@@ -778,7 +787,9 @@ function RewardCard({ res, charById, itemById, revealing }) {
 
 function BattleTab({ profile, game, persistProfile }) {
   const ownedIds = [...new Set(profile.unlocked_character_ids || [])];
-  const owned = ownedIds.map((id) => game.characters.find((c) => c.id === id)).filter(Boolean);
+  const favSet = new Set(profile.favorite_character_ids || []);
+  const owned = ownedIds.map((id) => game.characters.find((c) => c.id === id)).filter(Boolean)
+    .sort((a, b) => (favSet.has(b.id) ? 1 : 0) - (favSet.has(a.id) ? 1 : 0));
   const [team, setTeam] = useState([]);
   const [fight, setFight] = useState(null);
   const logRef = useRef(null);
@@ -845,7 +856,7 @@ function BattleTab({ profile, game, persistProfile }) {
         const patch = {};
         if (itemConsumedId) { const stacks = { ...(profile.item_stacks || {}) }; stacks[itemConsumedId] = Math.max(0, (stacks[itemConsumedId] || 0) - 1); patch.item_stacks = stacks; }
         if (over) {
-          const reward = result === "win" ? 40 + Math.floor(Math.random() * 60) : -50;
+          const reward = result === "win" ? 40 + Math.floor(Math.random() * 60) : lossPenalty((profile.unlocked_character_ids || []).length);
           patch.coins = Math.max(0, (profile.coins || 0) + reward);
           if (result === "win") patch.battles_won = (profile.battles_won || 0) + 1;
           state.reward = reward;
@@ -924,7 +935,7 @@ function BattleTab({ profile, game, persistProfile }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
             {owned.map((c) => (
               <div key={c.id} style={{ position: "relative" }}>
-                <CharCard character={c} locked={false} onClick={() => toggleTeam(c.id)} />
+                <CharCard character={c} locked={false} favorite={favSet.has(c.id)} onClick={() => toggleTeam(c.id)} />
                 {team.includes(c.id) && <div style={{ position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: "50%", background: "#F0A93A", color: "#141119", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>{team.indexOf(c.id) + 1}</div>}
               </div>
             ))}
@@ -1165,7 +1176,9 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
   const liveChallenges = challenges.filter((c) => c.status === "fighting" && (c.challenger_id === profile.id || c.opponent_id === profile.id));
   const incomingTrades = trades.filter((t) => t.recipient_id === profile.id && t.status === "pending");
   const outgoingTrades = trades.filter((t) => t.proposer_id === profile.id && t.status === "pending");
-  const owned = [...new Set(profile.unlocked_character_ids || [])].map((id) => game.characters.find((c) => c.id === id)).filter(Boolean);
+  const favSet = new Set(profile.favorite_character_ids || []);
+  const owned = [...new Set(profile.unlocked_character_ids || [])].map((id) => game.characters.find((c) => c.id === id)).filter(Boolean)
+    .sort((a, b) => (favSet.has(b.id) ? 1 : 0) - (favSet.has(a.id) ? 1 : 0));
 
   if (activeChallengeId) {
     const c = challenges.find((x) => x.id === activeChallengeId);
@@ -1265,6 +1278,7 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
       {pickingFor && (
         <TeamPickModal
           owned={owned}
+          favoriteIds={favSet}
           onCancel={() => setPickingFor(null)}
           onConfirm={(teamIds) => pickingFor.mode === "new" ? createChallenge(pickingFor.friend, teamIds) : acceptChallenge(pickingFor.challenge, teamIds)}
         />
@@ -1280,7 +1294,7 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
   );
 }
 
-function TeamPickModal({ owned, onCancel, onConfirm }) {
+function TeamPickModal({ owned, favoriteIds, onCancel, onConfirm }) {
   const [team, setTeam] = useState([]);
   const toggle = (id) => setTeam((t) => t.includes(id) ? t.filter((x) => x !== id) : (t.length < 3 ? [...t, id] : t));
   return (
@@ -1290,7 +1304,7 @@ function TeamPickModal({ owned, onCancel, onConfirm }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 16 }}>
           {owned.map((c) => (
             <div key={c.id} style={{ position: "relative" }}>
-              <CharCard character={c} locked={false} onClick={() => toggle(c.id)} />
+              <CharCard character={c} locked={false} favorite={favoriteIds?.has(c.id)} onClick={() => toggle(c.id)} />
               {team.includes(c.id) && <div style={{ position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: "50%", background: "#F0A93A", color: "#141119", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 12 }}>{team.indexOf(c.id) + 1}</div>}
             </div>
           ))}
@@ -1451,7 +1465,7 @@ function FriendBattleView({ challenge, game, profile, persistProfile, onExit }) 
     if (finished && !rewardedRef.current) {
       rewardedRef.current = true;
       const iWon = (st.winner === "A" && isChallenger) || (st.winner === "B" && !isChallenger);
-      const reward = iWon ? 60 + Math.floor(Math.random() * 60) : -50;
+      const reward = iWon ? 60 + Math.floor(Math.random() * 60) : lossPenalty((profile.unlocked_character_ids || []).length);
       const patch = { coins: Math.max(0, (profile.coins || 0) + reward) };
       if (iWon) patch.battles_won = (profile.battles_won || 0) + 1;
       persistProfile(patch);
