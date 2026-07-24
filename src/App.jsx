@@ -28,6 +28,11 @@ const ACHIEVEMENTS = [
   { id: "win_25", title: "Champion", desc: "Gagne 25 combats", icon: "🏆", reward: 300, check: (p) => (p.battles_won || 0) >= 25 },
   { id: "coins_1000", title: "Petit épargnant", desc: "Atteins 1000 pièces", icon: "💰", reward: 0, check: (p) => (p.coins || 0) >= 1000 },
   { id: "trade_1", title: "Marchand", desc: "Réalise ton premier échange", icon: "🤝", reward: 50, check: (p) => (p.trades_completed || 0) >= 1 },
+  { id: "friend_1", title: "Sociable", desc: "Ajoute ton premier ami", icon: "🧑‍🤝‍🧑", reward: 30, check: (p) => (p.friends_count || 0) >= 1 },
+  { id: "win_50", title: "Légende de l'arène", desc: "Gagne 50 combats", icon: "🥇", reward: 500, check: (p) => (p.battles_won || 0) >= 50 },
+  { id: "box_100", title: "Ouvreur compulsif", desc: "Ouvre 100 boîtes", icon: "🎉", reward: 300, check: (p) => (p.boxes_opened || 0) >= 100 },
+  { id: "coins_5000", title: "Grand épargnant", desc: "Atteins 5000 pièces", icon: "🏦", reward: 100, check: (p) => (p.coins || 0) >= 5000 },
+  { id: "daily_7", title: "Habitué", desc: "Réclame les pièces gratuites 7 fois", icon: "📅", reward: 150, check: (p) => (p.daily_claims || 0) >= 7 },
 ];
 
 function todayStr() { return new Date().toISOString().slice(0, 10); }
@@ -53,17 +58,13 @@ function lossPenalty(ownedCharCount) {
 }
 
 function computeDamage(attackerSpeed, defenderSpeed, baseDmg) {
-  const diff = (attackerSpeed || 0) - (defenderSpeed || 0);
-  let dmg = baseDmg, crit = false, dodge = false;
-  if (diff > 0) {
-    const critChance = Math.min(0.35, diff * 0.03);
-    if (Math.random() < critChance) { dmg = Math.round(dmg * 1.5); crit = true; }
-  } else if (diff < 0) {
-    const dodgeChance = Math.min(0.35, -diff * 0.03);
-    if (Math.random() < dodgeChance) { dmg = Math.round(dmg * 0.5); dodge = true; }
-  }
-  return { dmg, crit, dodge };
+  // sondage joueurs : chaque point de vitesse donne 1 chance sur 20 d'esquiver totalement une attaque
+  const dodgeChance = Math.min(0.9, (defenderSpeed || 0) / 20);
+  const dodge = Math.random() < dodgeChance;
+  const dmg = dodge ? 0 : baseDmg;
+  return { dmg, crit: false, dodge };
 }
+function speedEnergyBonus(speed) { return (speed || 0) * 2; } // sondage joueurs : la vitesse recharge le Super plus vite
 
 function rollBox(box, ownedCharacterIds = []) {
   const pool = [
@@ -381,7 +382,7 @@ export default function App() {
         {tab === "profile" && <ProfileTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
       </div>
-      <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} hasFriendNotif={hasFriendNotif} />
+      <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} hasFriendNotif={hasFriendNotif} dailyClaimAvailable={profile.last_daily_claim !== todayStr()} />
       {detailChar && <CharModal character={detailChar} owned={profile.unlocked_character_ids?.includes(detailChar.id)} isFavorite={(profile.favorite_character_ids || []).includes(detailChar.id)} onToggleFavorite={() => { const favs = profile.favorite_character_ids || []; const next = favs.includes(detailChar.id) ? favs.filter((id) => id !== detailChar.id) : [...favs, detailChar.id]; persistProfile({ favorite_character_ids: next }); }} onClose={() => setDetailChar(null)} />}
       {toast && <Toast text={toast} />}
     </div>
@@ -418,7 +419,7 @@ function TopBar({ profile, onLogout, menuOpen, setMenuOpen }) {
   );
 }
 
-function BottomNav({ tab, setTab, isAdmin, hasFriendNotif }) {
+function BottomNav({ tab, setTab, isAdmin, hasFriendNotif, dailyClaimAvailable }) {
   const items = [
     { id: "specimens", icon: "🃏", label: "Spécimens" },
     { id: "shop", icon: "🎁", label: "Boutique" },
@@ -426,7 +427,7 @@ function BottomNav({ tab, setTab, isAdmin, hasFriendNotif }) {
     { id: "friends", icon: "👥", label: "Amis", notif: hasFriendNotif },
     { id: "ideas", icon: "💡", label: "Idées" },
     { id: "news", icon: "📰", label: "Actus" },
-    { id: "profile", icon: "👤", label: "Profil" },
+    { id: "profile", icon: "👤", label: "Profil", notif: dailyClaimAvailable },
     ...(isAdmin ? [{ id: "admin", icon: "🛠️", label: "Admin" }] : []),
   ];
   return (
@@ -828,16 +829,17 @@ function BattleTab({ profile, game, persistProfile }) {
       const applyMove = (side, attacker, defender, moveKey) => {
         const move = attacker[moveKey]; if (!move) return;
         const base = Math.round((move.dmg || 0) * (1 + (attacker.buff || 0) / 100));
-        const { dmg, crit, dodge } = computeDamage(attacker.speed, defender.speed, base);
+        const hasDamage = base > 0;
+        const { dmg, dodge } = hasDamage ? computeDamage(attacker.speed, defender.speed, base) : { dmg: 0, dodge: false };
         defender.curHp = Math.max(0, defender.curHp - dmg);
-        if (dmg > 0) {
-          hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super", crit, dodge });
-          log.push(`${attacker.name} ▸ ${move.name} : -${dmg}${crit ? " 🎯 critique !" : dodge ? " (esquive partielle)" : ""}`);
-          defender.energy = Math.min(superCost(defender), (defender.energy || 0) + ENERGY_GAIN.hitTaken);
+        if (hasDamage) {
+          hits.push({ side: side === "p" ? "bot" : "p", index: side === "p" ? bIdx : pIdx, amount: dodge ? 0 : dmg, kind: dodge ? "dodge" : "dmg", superMove: moveKey === "super" });
+          log.push(dodge ? `${defender.name} esquive totalement l'attaque !` : `${attacker.name} ▸ ${move.name} : -${dmg}`);
+          if (dmg > 0) defender.energy = Math.min(superCost(defender), (defender.energy || 0) + ENERGY_GAIN.hitTaken);
         }
         if (move.heal) { attacker.curHp = Math.min(attacker.hp, attacker.curHp + move.heal); hits.push({ side, index: side === "p" ? pIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attacker.name} soigné +${move.heal}`); }
         if (moveKey === "super") attacker.energy = 0;
-        else attacker.energy = Math.min(superCost(attacker), (attacker.energy || 0) + moveEnergyGain(attacker, moveKey));
+        else attacker.energy = Math.min(superCost(attacker), (attacker.energy || 0) + moveEnergyGain(attacker, moveKey) + speedEnergyBonus(attacker.speed));
       };
       const order = pc.speed >= bc.speed ? ["p", "bot"] : ["bot", "p"];
       for (const turn of order) {
@@ -993,13 +995,21 @@ function HpBar({ pct, color }) {
   );
 }
 
-function FloatingHit({ amount, kind, hitKey, crit, dodge }) {
+function FloatingHit({ amount, kind, hitKey }) {
+  if (kind === "dodge") {
+    return (
+      <div key={hitKey} style={{
+        position: "absolute", right: -8, top: -4, fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, fontSize: 11,
+        color: "#5B8DEF", textShadow: "0 2px 6px rgba(0,0,0,0.7)", animation: "floatHit 1.1s ease-out forwards", pointerEvents: "none", zIndex: 6, whiteSpace: "nowrap",
+      }}>💨 ESQUIVE</div>
+    );
+  }
   return (
     <div key={hitKey} style={{
-      position: "absolute", right: -2, top: -4, fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, fontSize: crit ? 19 : 16,
-      color: kind === "heal" ? "#7cd992" : crit ? "#ff9d3d" : dodge ? "#b9b8c4" : "#ff5252", textShadow: "0 2px 6px rgba(0,0,0,0.7), 0 0 10px rgba(0,0,0,0.5)",
+      position: "absolute", right: -2, top: -4, fontFamily: "'JetBrains Mono', monospace", fontWeight: 900, fontSize: 16,
+      color: kind === "heal" ? "#7cd992" : "#ff5252", textShadow: "0 2px 6px rgba(0,0,0,0.7), 0 0 10px rgba(0,0,0,0.5)",
       animation: "floatHit 1.1s ease-out forwards", pointerEvents: "none", zIndex: 6,
-    }}>{kind === "heal" ? "+" : "-"}{amount}{crit ? "!" : ""}</div>
+    }}>{kind === "heal" ? "+" : "-"}{amount}</div>
   );
 }
 
@@ -1013,8 +1023,8 @@ function BattleSidePanel({ title, chars, active, align, teamColor, hits, turnId,
         const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a";
         const hit = (hits || []).find((h) => h.side === sideKey && h.index === i);
         const isKO = hit && hit.kind === "dmg" && c.curHp <= 0;
-        const isAttacker = (hits || []).some((h) => h.kind === "dmg" && h.side !== sideKey && i === active);
-        const superHit = isAttacker && (hits || []).find((h) => h.kind === "dmg" && h.side !== sideKey)?.superMove;
+        const isAttacker = (hits || []).some((h) => (h.kind === "dmg" || h.kind === "dodge") && h.side !== sideKey && i === active);
+        const superHit = isAttacker && (hits || []).find((h) => (h.kind === "dmg" || h.kind === "dodge") && h.side !== sideKey)?.superMove;
         return (
           <div key={i} style={{ opacity: c.curHp <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
             <div key={`av-${turnId}-${i}`} style={{ position: "relative", width: 34, height: 34, flexShrink: 0, animation: isAttacker ? `${align === "right" ? "lungeLeft" : "lungeRight"} 0.45s ease-out` : hit ? "hitShake 0.4s ease-out" : undefined }}>
@@ -1087,6 +1097,8 @@ function FriendsTab({ profile, game, showToast, persistProfile }) {
     let profiles = {};
     if (ids.length) { const { data: p } = await supabase.from("profiles").select("id,username,avatar").in("id", ids); (p || []).forEach((pr) => { profiles[pr.id] = pr; }); }
     setFriendships(data.map((f) => ({ ...f, other: profiles[f.requester_id === profile.id ? f.addressee_id : f.requester_id] })));
+    const acceptedCount = data.filter((f) => f.status === "accepted").length;
+    if (acceptedCount !== (profile.friends_count || 0)) persistProfile({ friends_count: acceptedCount });
   }, [profile.id]);
 
   const loadChallenges = useCallback(async () => {
@@ -1541,8 +1553,8 @@ function FriendTeamPanel({ team, hp, active, charById, teamColor, title, align, 
       {team.map((id, i) => { const c = charById(id); if (!c) return null; const pct = Math.max(0, Math.round((hp[i] / c.hp) * 100)); const isActive = i === active && hp[i] > 0; const hpColor = pct > 50 ? "#7cd992" : pct > 20 ? "#F0A93A" : "#ef6a6a";
         const hit = (hits || []).find((h) => h.side === sideLetter && h.index === i);
         const isKO = hit && hit.kind === "dmg" && hp[i] <= 0;
-        const isAttacker = (hits || []).some((h) => h.kind === "dmg" && h.side !== sideLetter && i === active);
-        const superHit = isAttacker && (hits || []).find((h) => h.kind === "dmg" && h.side !== sideLetter)?.superMove;
+        const isAttacker = (hits || []).some((h) => (h.kind === "dmg" || h.kind === "dodge") && h.side !== sideLetter && i === active);
+        const superHit = isAttacker && (hits || []).find((h) => (h.kind === "dmg" || h.kind === "dodge") && h.side !== sideLetter)?.superMove;
         return (
         <div key={i} style={{ opacity: hp[i] <= 0 ? 0.3 : 1, marginBottom: 8, display: "flex", gap: 7, flexDirection: align === "right" ? "row-reverse" : "row", alignItems: "center" }}>
           <div key={`av-${turnId}-${i}`} style={{ position: "relative", width: 34, height: 34, flexShrink: 0, animation: isAttacker ? `${align === "right" ? "lungeLeft" : "lungeRight"} 0.45s ease-out` : hit ? "hitShake 0.4s ease-out" : undefined }}>
@@ -1578,16 +1590,17 @@ function resolveFriendTurn(st, game) {
   const applyMove = (side, attackerChar, attackerHpArr, attackerActive, attackerEnergyArr, moveKey, defenderChar, defenderHpArr, defenderActive, defenderEnergyArr) => {
     const move = attackerChar[moveKey]; if (!move) return;
     const base = move.dmg || 0;
-    const { dmg, crit, dodge } = computeDamage(attackerChar.speed, defenderChar.speed, base);
+    const hasDamage = base > 0;
+    const { dmg, dodge } = hasDamage ? computeDamage(attackerChar.speed, defenderChar.speed, base) : { dmg: 0, dodge: false };
     defenderHpArr[defenderActive] = Math.max(0, defenderHpArr[defenderActive] - dmg);
-    if (dmg > 0) {
-      hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dmg, kind: "dmg", superMove: moveKey === "super", crit, dodge });
-      log.push(`${attackerChar.name} ▸ ${move.name} : -${dmg}${crit ? " 🎯 critique !" : dodge ? " (esquive partielle)" : ""}`);
-      defenderEnergyArr[defenderActive] = Math.min(superCost(defenderChar), (defenderEnergyArr[defenderActive] || 0) + ENERGY_GAIN.hitTaken);
+    if (hasDamage) {
+      hits.push({ side: side === "A" ? "B" : "A", index: side === "A" ? bIdx : aIdx, amount: dodge ? 0 : dmg, kind: dodge ? "dodge" : "dmg", superMove: moveKey === "super" });
+      log.push(dodge ? `${defenderChar.name} esquive totalement l'attaque !` : `${attackerChar.name} ▸ ${move.name} : -${dmg}`);
+      if (dmg > 0) defenderEnergyArr[defenderActive] = Math.min(superCost(defenderChar), (defenderEnergyArr[defenderActive] || 0) + ENERGY_GAIN.hitTaken);
     }
     if (move.heal) { attackerHpArr[attackerActive] = Math.min(attackerChar.hp, attackerHpArr[attackerActive] + move.heal); hits.push({ side, index: side === "A" ? aIdx : bIdx, amount: move.heal, kind: "heal" }); log.push(`${attackerChar.name} soigné +${move.heal}`); }
     if (moveKey === "super") attackerEnergyArr[attackerActive] = 0;
-    else attackerEnergyArr[attackerActive] = Math.min(superCost(attackerChar), (attackerEnergyArr[attackerActive] || 0) + moveEnergyGain(attackerChar, moveKey));
+    else attackerEnergyArr[attackerActive] = Math.min(superCost(attackerChar), (attackerEnergyArr[attackerActive] || 0) + moveEnergyGain(attackerChar, moveKey) + speedEnergyBonus(attackerChar.speed));
   };
   const order = charA.speed >= charB.speed ? ["A", "B"] : ["B", "A"];
   for (const turn of order) {
@@ -1899,7 +1912,7 @@ function ProfileTab({ profile, game, persistProfile, showToast }) {
 
       <button
         disabled={dailyClaimed}
-        onClick={() => persistProfile({ coins: (profile.coins || 0) + 100, last_daily_claim: todayStr() })}
+        onClick={() => persistProfile({ coins: (profile.coins || 0) + 100, last_daily_claim: todayStr(), daily_claims: (profile.daily_claims || 0) + 1 })}
         style={{
           all: "unset", cursor: dailyClaimed ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
           width: "100%", boxSizing: "border-box", padding: "16px 0", borderRadius: 14, marginBottom: 14,
