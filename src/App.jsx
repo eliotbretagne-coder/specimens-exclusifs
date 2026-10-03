@@ -262,6 +262,8 @@ export default function App() {
   const toastTimer = useRef(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hasFriendNotif, setHasFriendNotif] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [testProfile, setTestProfile] = useState(null);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -355,6 +357,25 @@ export default function App() {
   if (!profile || !game) return <LoadingScreen text="Chargement de ton profil…" />;
 
   const isAdmin = profile.is_admin === true;
+  const effectiveProfile = (isAdmin && testMode && testProfile) ? testProfile : profile;
+  const effectivePersistProfile = (isAdmin && testMode)
+    ? async (patch) => setTestProfile((prev) => ({ ...(prev || profile), ...patch }))
+    : persistProfile;
+  const toggleTestMode = () => {
+    if (!testMode) {
+      setTestProfile({
+        ...profile,
+        unlocked_character_ids: game.characters.map((c) => c.id),
+        unlocked_item_ids: game.items.map((i) => i.id),
+        item_stacks: Object.fromEntries(game.items.map((i) => [i.id, i.stack_limit ?? 99])),
+        coins: 999999,
+      });
+      setTestMode(true);
+    } else {
+      setTestMode(false);
+      setTestProfile(null);
+    }
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: "#0e0e13", color: "#f4f2ec", fontFamily: "'Work Sans', sans-serif", paddingBottom: 78 }}>
@@ -371,19 +392,19 @@ export default function App() {
         @keyframes vignettePulse { 0%,100%{ opacity:0.3;} 50%{ opacity:0.7;} }
         @keyframes hpBleed { from{ opacity: 0.9; } to{ opacity: 0; } }
       `}</style>
-      <TopBar profile={profile} menuOpen={menuOpen} setMenuOpen={setMenuOpen} onLogout={() => supabase.auth.signOut()} />
+      <TopBar profile={effectiveProfile} menuOpen={menuOpen} setMenuOpen={setMenuOpen} onLogout={() => supabase.auth.signOut()} testMode={testMode} />
       <div style={{ maxWidth: 480, margin: "0 auto", padding: "14px 14px 24px" }}>
-        {tab === "specimens" && <SpecimensTab profile={profile} game={game} onOpen={setDetailChar} />}
-        {tab === "shop" && <ShopTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
-        {tab === "battle" && <BattleTab profile={profile} game={game} persistProfile={persistProfile} />}
-        {tab === "friends" && <FriendsTab profile={profile} game={game} showToast={showToast} persistProfile={persistProfile} />}
-        {tab === "ideas" && <IdeasTab profile={profile} showToast={showToast} />}
-        {tab === "news" && <NewsTab game={game} profile={profile} showToast={showToast} persistProfile={persistProfile} />}
-        {tab === "profile" && <ProfileTab profile={profile} game={game} persistProfile={persistProfile} showToast={showToast} />}
+        {tab === "specimens" && <SpecimensTab profile={effectiveProfile} game={game} onOpen={setDetailChar} />}
+        {tab === "shop" && <ShopTab profile={effectiveProfile} game={game} persistProfile={effectivePersistProfile} showToast={showToast} />}
+        {tab === "battle" && <BattleTab profile={effectiveProfile} game={game} persistProfile={effectivePersistProfile} />}
+        {tab === "friends" && <FriendsTab profile={effectiveProfile} game={game} showToast={showToast} persistProfile={effectivePersistProfile} />}
+        {tab === "ideas" && <IdeasTab profile={effectiveProfile} game={game} showToast={showToast} isAdmin={isAdmin} />}
+        {tab === "news" && <NewsTab game={game} profile={effectiveProfile} showToast={showToast} persistProfile={effectivePersistProfile} />}
+        {tab === "profile" && <ProfileTab profile={effectiveProfile} game={game} persistProfile={effectivePersistProfile} showToast={showToast} testMode={testMode} onToggleTestMode={toggleTestMode} />}
         {tab === "admin" && isAdmin && <AdminTab game={game} reload={loadGame} showToast={showToast} />}
       </div>
-      <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} hasFriendNotif={hasFriendNotif} dailyClaimAvailable={profile.last_daily_claim !== todayStr()} />
-      {detailChar && <CharModal character={detailChar} owned={profile.unlocked_character_ids?.includes(detailChar.id)} isFavorite={(profile.favorite_character_ids || []).includes(detailChar.id)} onToggleFavorite={() => { const favs = profile.favorite_character_ids || []; const next = favs.includes(detailChar.id) ? favs.filter((id) => id !== detailChar.id) : [...favs, detailChar.id]; persistProfile({ favorite_character_ids: next }); }} onClose={() => setDetailChar(null)} />}
+      <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} hasFriendNotif={hasFriendNotif} dailyClaimAvailable={effectiveProfile.last_daily_claim !== todayStr()} />
+      {detailChar && <CharModal character={detailChar} owned={effectiveProfile.unlocked_character_ids?.includes(detailChar.id)} isFavorite={(effectiveProfile.favorite_character_ids || []).includes(detailChar.id)} onToggleFavorite={() => { const favs = effectiveProfile.favorite_character_ids || []; const next = favs.includes(detailChar.id) ? favs.filter((id) => id !== detailChar.id) : [...favs, detailChar.id]; effectivePersistProfile({ favorite_character_ids: next }); }} onClose={() => setDetailChar(null)} />}
       {toast && <Toast text={toast} />}
     </div>
   );
@@ -393,12 +414,14 @@ function LoadingScreen({ text }) {
   return <div style={{ minHeight: "100vh", background: "#0e0e13", display: "flex", alignItems: "center", justifyContent: "center", color: "#666", fontFamily: "'Work Sans', sans-serif" }}>{text}</div>;
 }
 
-function TopBar({ profile, onLogout, menuOpen, setMenuOpen }) {
+function TopBar({ profile, onLogout, menuOpen, setMenuOpen, testMode }) {
   return (
     <div style={{
       position: "sticky", top: 0, zIndex: 50, background: "#0e0e13ee", backdropFilter: "blur(8px)",
-      borderBottom: "1px solid #201f28", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between",
+      borderBottom: "1px solid #201f28",
     }}>
+      {testMode && <div style={{ background: "linear-gradient(90deg,#EF4444,#F0A93A)", color: "#141119", fontWeight: 800, fontSize: 10.5, textAlign: "center", padding: "3px 0", letterSpacing: 0.5 }}>🧪 MODE TEST — rien n'est sauvegardé</div>}
+      <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
         <div style={{ fontSize: 20 }}>🃏</div>
         <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 13.5 }}>Spécimens Exclusifs</div>
@@ -414,6 +437,7 @@ function TopBar({ profile, onLogout, menuOpen, setMenuOpen }) {
             <button onClick={onLogout} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", padding: "9px 12px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, color: "#ef6a6a" }}>🚪 Se déconnecter</button>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
@@ -1739,7 +1763,8 @@ function NewsItem({ n, profile, showToast, persistProfile }) {
 
 /* ---------------------------------- Idées & Sondages ---------------------------------- */
 
-function IdeasTab({ profile, showToast }) {
+function IdeasTab({ profile, game, showToast, isAdmin }) {
+  const [submitting, setSubmitting] = useState(false);
   const [polls, setPolls] = useState(null);
   const [posts, setPosts] = useState(null);
   const [filter, setFilter] = useState("all");
@@ -1812,6 +1837,28 @@ function IdeasTab({ profile, showToast }) {
     <div>
       <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 18, marginBottom: 4 }}>Idées & Problèmes</div>
       <div style={{ fontSize: 12, color: "#8a8998", marginBottom: 16 }}>Propose des idées, signale un problème, vote pour ce que tu préfères.</div>
+
+      <button onClick={() => setSubmitting(true)} style={{ all: "unset", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", boxSizing: "border-box", padding: "13px 0", borderRadius: 14, marginBottom: 16, background: "#1a2440", border: "1px solid #5B8DEF55" }}>
+        <span style={{ fontSize: 17 }}>📤</span>
+        <span style={{ fontWeight: 800, fontSize: 13, color: "#5B8DEF" }}>Soumettre un spécimen</span>
+      </button>
+      {submitting && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.85)", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
+          <div style={{ maxWidth: 480, margin: "0 auto", background: "#141319", border: "1px solid #5B8DEF44", borderRadius: 16, padding: 16 }}>
+            <CharacterForm
+              title="Proposer un spécimen"
+              isSubmission
+              showToast={showToast}
+              onCancel={() => setSubmitting(false)}
+              onDone={() => setSubmitting(false)}
+              onSave={async (payload) => {
+                const { error } = await supabase.from("character_submissions").insert({ user_id: profile.id, username: profile.username, status: "pending", data: payload });
+                return error;
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {polls && polls.length > 0 && (
         <div style={{ marginBottom: 20 }}>
@@ -1894,9 +1941,10 @@ function FeedbackPost({ post, profile, onVote, onDelete }) {
 }
 
 
-function ProfileTab({ profile, game, persistProfile, showToast }) {
+function ProfileTab({ profile, game, persistProfile, showToast, testMode, onToggleTestMode }) {
   const [confirmReset, setConfirmReset] = useState(false);
   const [coinInput, setCoinInput] = useState(100);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const itemById = (id) => game.items.find((i) => i.id === id);
   const dailyClaimed = profile.last_daily_claim === todayStr();
 
@@ -1909,6 +1957,19 @@ function ProfileTab({ profile, game, persistProfile, showToast }) {
         <div style={{ fontSize: 11, color: "#5c5b68", marginTop: 2 }}>{profile.email}</div>
         {profile.is_admin && <div style={{ marginTop: 8 }}><span style={{ fontSize: 11, color: "#FFD54A", fontWeight: 800, background: "#4a3f1a", border: "1px solid #FFD54A55", borderRadius: 6, padding: "3px 9px" }}>🛠️ Administrateur</span></div>}
       </div>
+
+      <button onClick={() => setShowLeaderboard(true)} style={{ all: "unset", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", boxSizing: "border-box", padding: "13px 0", borderRadius: 14, marginBottom: 10, background: "#1a1430", border: "1px solid #A855F755" }}>
+        <span style={{ fontSize: 17 }}>🏆</span>
+        <span style={{ fontWeight: 800, fontSize: 13, color: "#A855F7" }}>Voir le classement</span>
+      </button>
+      {showLeaderboard && <LeaderboardModal onClose={() => setShowLeaderboard(false)} />}
+
+      {profile.is_admin && (
+        <button onClick={onToggleTestMode} style={{ all: "unset", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", boxSizing: "border-box", padding: "13px 0", borderRadius: 14, marginBottom: 14, background: testMode ? "linear-gradient(90deg,#EF4444,#F0A93A)" : "#1a1922", border: testMode ? "none" : "1px solid #2a2933" }}>
+          <span style={{ fontSize: 17 }}>🧪</span>
+          <span style={{ fontWeight: 800, fontSize: 13, color: testMode ? "#141119" : "#c2c1cc" }}>{testMode ? "Quitter le mode test" : "Activer le mode test (tout débloqué, argent illimité)"}</span>
+        </button>
+      )}
 
       <button
         disabled={dailyClaimed}
@@ -1996,6 +2057,48 @@ function MiniStat({ label, value, icon }) {
   );
 }
 
+function LeaderboardModal({ onClose }) {
+  const [rows, setRows] = useState(null);
+
+  useEffect(() => {
+    supabase.from("profiles").select("username,avatar,coins,unlocked_character_ids").then(({ data }) => {
+      const ranked = (data || [])
+        .map((p) => ({ ...p, cardCount: (p.unlocked_character_ids || []).length, score: (p.coins || 0) * (p.unlocked_character_ids || []).length }))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 30);
+      setRows(ranked);
+    });
+  }, []);
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(6,6,9,0.82)", zIndex: 320, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: 480, maxHeight: "82vh", overflowY: "auto", background: "#141319", borderRadius: "20px 20px 0 0", padding: "18px 18px 26px", border: "1px solid #A855F744", borderBottom: "none" }}>
+        <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 17, marginBottom: 4 }}>🏆 Classement</div>
+        <div style={{ fontSize: 11.5, color: "#8a8998", marginBottom: 14 }}>Score = pièces × nombre de spécimens débloqués.</div>
+        {rows === null && <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Chargement…</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {(rows || []).map((p, i) => (
+            <div key={i} style={{
+              display: "flex", alignItems: "center", gap: 10, background: i < 3 ? "#241a12" : "#17161f",
+              border: `1px solid ${i === 0 ? "#FFD54A88" : i === 1 ? "#c0c0c088" : i === 2 ? "#cd7f3288" : "#24232d"}`,
+              borderRadius: 10, padding: "9px 12px",
+            }}>
+              <div style={{ width: 22, textAlign: "center", fontWeight: 900, fontSize: 13, color: i === 0 ? "#FFD54A" : i === 1 ? "#c0c0c0" : i === 2 ? "#cd7f32" : "#5c5b68" }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</div>
+              <div style={{ fontSize: 16 }}>{p.avatar || "🙂"}</div>
+              <div style={{ flex: 1, fontSize: 13, fontWeight: 700 }}>{p.username}</div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 800, fontSize: 12.5, color: "#F0A93A" }}>{p.score.toLocaleString("fr-FR")}</div>
+                <div style={{ fontSize: 9, color: "#77768a" }}>{p.coins}⭐ × {p.cardCount}🃏</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={onClose} style={{ all: "unset", cursor: "pointer", display: "block", width: "100%", textAlign: "center", marginTop: 16, padding: "12px 0", borderRadius: 12, background: "#1e1d27", color: "#c2c1cc", fontWeight: 700, fontSize: 13 }}>Fermer</button>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------------------------- Admin ---------------------------------- */
 
 function AdminTab({ game, reload, showToast }) {
@@ -2009,6 +2112,7 @@ function AdminTab({ game, reload, showToast }) {
     { id: "comments", label: "Commentaires" },
     { id: "polls", label: "Sondages" },
     { id: "ideas", label: "Idées" },
+    { id: "submissions", label: "Soumissions" },
   ];
   const deleteRow = async (table, id) => {
     const { error } = await supabase.from(table).delete().eq("id", id);
@@ -2019,6 +2123,20 @@ function AdminTab({ game, reload, showToast }) {
   if (editing?.type === "characters") return <CharacterForm row={editing.row} onDone={() => { setEditing(null); reload(); }} onCancel={() => setEditing(null)} showToast={showToast} />;
   if (editing?.type === "items") return <ItemForm row={editing.row} onDone={() => { setEditing(null); reload(); }} onCancel={() => setEditing(null)} showToast={showToast} />;
   if (editing?.type === "boxes") return <BoxForm row={editing.row} game={game} onDone={() => { setEditing(null); reload(); }} onCancel={() => setEditing(null)} showToast={showToast} />;
+  if (editing?.type === "submission") return (
+    <CharacterForm
+      row={editing.row.data} title={`Modifier la proposition de ${editing.row.username}`}
+      showToast={showToast} onCancel={() => setEditing(null)}
+      onDone={() => setEditing(null)}
+      onSave={async (payload) => {
+        const { error: e1 } = await supabase.from("characters").upsert(payload);
+        if (e1) return e1;
+        const { error: e2 } = await supabase.from("character_submissions").update({ status: "accepted" }).eq("id", editing.row.id);
+        reload();
+        return e2;
+      }}
+    />
+  );
 
   return (
     <div>
@@ -2033,6 +2151,7 @@ function AdminTab({ game, reload, showToast }) {
       {section === "comments" && <AdminComments game={game} showToast={showToast} />}
       {section === "polls" && <AdminPolls showToast={showToast} />}
       {section === "ideas" && <AdminIdeas showToast={showToast} />}
+      {section === "submissions" && <AdminSubmissions showToast={showToast} reload={reload} onEdit={(row) => setEditing({ type: "submission", row })} />}
       {section === "characters" && (<>
         <NewButton onClick={() => setEditing({ type: "characters", row: null })} label="+ Nouveau personnage" />
         <AdminList rows={game.characters} table="characters" deleteRow={deleteRow} onEdit={(r) => setEditing({ type: "characters", row: r })} renderRow={(c) => `${c.name} · ${RARITIES[c.rarity]?.label} · PTD ${c.ptd}`} />
@@ -2070,14 +2189,14 @@ function AdminList({ rows, renderRow, deleteRow, onEdit, table }) {
   );
 }
 
-function FormShell({ title, onCancel, onSubmit, busy, children }) {
+function FormShell({ title, onCancel, onSubmit, busy, children, submitLabel }) {
   return (
     <div>
       <div style={{ fontFamily: "Bungee, sans-serif", fontSize: 16, marginBottom: 14 }}>{title}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{children}</div>
       <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
         <button onClick={onCancel} style={{ all: "unset", cursor: "pointer", flex: 1, textAlign: "center", padding: "12px 0", borderRadius: 10, background: "#232230", color: "#c2c1cc", fontWeight: 700, fontSize: 13 }}>Annuler</button>
-        <button disabled={busy} onClick={onSubmit} style={{ all: "unset", cursor: "pointer", flex: 2, textAlign: "center", padding: "12px 0", borderRadius: 10, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13, opacity: busy ? 0.6 : 1 }}>{busy ? "…" : "Enregistrer"}</button>
+        <button disabled={busy} onClick={onSubmit} style={{ all: "unset", cursor: "pointer", flex: 2, textAlign: "center", padding: "12px 0", borderRadius: 10, background: "linear-gradient(90deg,#F0A93A,#EC4899)", color: "#141119", fontWeight: 800, fontSize: 13, opacity: busy ? 0.6 : 1 }}>{busy ? "…" : (submitLabel || "Enregistrer")}</button>
       </div>
     </div>
   );
@@ -2148,7 +2267,7 @@ function MoveFields({ label, move, onChange, energyMode }) {
   );
 }
 
-function CharacterForm({ row, onDone, onCancel, showToast }) {
+function CharacterForm({ row, onDone, onCancel, showToast, onSave, title, isSubmission }) {
   const [f, setF] = useState(row || { name: "", rarity: "rare", habitat: "", description: "", image_url: "", hp: 100, speed: 5, ptd: 30, attack1: EMPTY_MOVE, attack2: EMPTY_MOVE, super: EMPTY_MOVE });
   const [busy, setBusy] = useState(false);
   const set = (patch) => setF((v) => ({ ...v, ...patch }));
@@ -2156,12 +2275,14 @@ function CharacterForm({ row, onDone, onCancel, showToast }) {
     if (!f.name.trim()) { showToast("Le nom est requis."); return; }
     setBusy(true);
     const payload = { ...f, id: f.id || slug(f.name) };
-    const { error } = await supabase.from("characters").upsert(payload);
+    let error = null;
+    if (onSave) { error = await onSave(payload); }
+    else { ({ error } = await supabase.from("characters").upsert(payload)); }
     setBusy(false);
-    if (error) showToast("Erreur : " + error.message); else { showToast("Personnage enregistré."); onDone(); }
+    if (error) showToast("Erreur : " + (error.message || error)); else { showToast(isSubmission ? "Spécimen envoyé aux admins, merci !" : "Personnage enregistré."); onDone(); }
   };
   return (
-    <FormShell title={row ? "Modifier le personnage" : "Nouveau personnage"} onCancel={onCancel} onSubmit={submit} busy={busy}>
+    <FormShell title={title || (row ? "Modifier le personnage" : "Nouveau personnage")} onCancel={onCancel} onSubmit={submit} busy={busy} submitLabel={isSubmission ? "📤 Envoyer aux admins" : undefined}>
       <Field label="Nom"><input value={f.name} onChange={(e) => set({ name: e.target.value })} style={inputStyle} /></Field>
       <Field label="Rareté"><select value={f.rarity} onChange={(e) => set({ rarity: e.target.value })} style={selectStyle}>{RARITY_ORDER.map((r) => <option key={r} value={r}>{RARITIES[r].label}</option>)}</select></Field>
       <Field label="Habitat"><input value={f.habitat || ""} onChange={(e) => set({ habitat: e.target.value })} style={inputStyle} /></Field>
@@ -2459,6 +2580,50 @@ function AdminIdeas({ showToast }) {
         <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#17161f", border: "1px solid #24232d", borderRadius: 10, padding: "10px 12px" }}>
           <div style={{ fontSize: 12 }}>{p.type === "bug" ? "🐞" : "💡"} <strong>{p.username}</strong> — {p.content}</div>
           <button onClick={() => remove(p)} style={{ all: "unset", cursor: "pointer", fontSize: 14, flexShrink: 0, marginLeft: 8 }}>🗑️</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+function AdminSubmissions({ showToast, reload, onEdit }) {
+  const [subs, setSubs] = useState(null);
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("character_submissions").select("*").eq("status", "pending").order("created_at", { ascending: false });
+    setSubs(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const accept = async (s) => {
+    const { error: e1 } = await supabase.from("characters").upsert(s.data);
+    if (e1) { showToast("Erreur : " + e1.message); return; }
+    await supabase.from("character_submissions").update({ status: "accepted" }).eq("id", s.id);
+    showToast(`Spécimen "${s.data.name}" accepté !`);
+    load(); reload();
+  };
+  const reject = async (s) => { await supabase.from("character_submissions").update({ status: "rejected" }).eq("id", s.id); showToast("Proposition refusée."); load(); };
+
+  if (subs === null) return <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Chargement…</div>;
+  if (subs.length === 0) return <div style={{ fontSize: 12.5, color: "#5c5b68" }}>Aucune proposition en attente.</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {subs.map((s) => (
+        <div key={s.id} style={{ background: "#17161f", border: "1px solid #5B8DEF44", borderRadius: 12, padding: "12px 14px" }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+            <div style={{ width: 48, height: 48, borderRadius: 8, overflow: "hidden", background: "#0e0e13", flexShrink: 0 }}>
+              {s.data.image_url ? <img src={s.data.image_url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🃏</div>}
+            </div>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: 13.5 }}>{s.data.name}</div>
+              <div style={{ fontSize: 11, color: "#8a8998" }}>Proposé par {s.username} · {RARITIES[s.data.rarity]?.label}</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => onEdit(s)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#F0A93A", padding: "6px 10px", borderRadius: 8, border: "1px solid #F0A93A55" }}>✏️ Modifier</button>
+            <button onClick={() => accept(s)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#7cd992", padding: "6px 10px", borderRadius: 8, border: "1px solid #7cd99255" }}>✓ Accepter</button>
+            <button onClick={() => reject(s)} style={{ all: "unset", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#ef6a6a", padding: "6px 10px", borderRadius: 8, border: "1px solid #ef6a6a55" }}>✕ Refuser</button>
+          </div>
         </div>
       ))}
     </div>
